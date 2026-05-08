@@ -7,6 +7,8 @@ import { Dashboard } from "@/pages/dashboard";
 import { Signals } from "@/pages/signals";
 import { SignalDetail } from "@/pages/signal-detail";
 import { BotPage } from "@/pages/bot";
+import { AnalyticsPage } from "@/pages/analytics";
+import { BacktestPage } from "@/pages/backtest";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -19,6 +21,8 @@ function Router() {
         <Route path="/signals" component={Signals} />
         <Route path="/signal/:id" component={SignalDetail} />
         <Route path="/bot" component={BotPage} />
+        <Route path="/analytics" component={AnalyticsPage} />
+        <Route path="/backtest" component={BacktestPage} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

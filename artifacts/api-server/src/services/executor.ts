@@ -8,6 +8,7 @@ import {
   placePriceTriggeredOrder,
   toGateSymbol,
 } from "./gateio";
+import { getMarketStatus } from "./market";
 import { logger } from "../lib/logger";
 import { notifyTradeOpened } from "./notify";
 
@@ -18,7 +19,6 @@ const GRADE_ORDER: Record<string, number> = {
   "A+ Setup": 3,
 };
 
-// Size multipliers per trading mode
 const MODE_SIZE_MULTIPLIER: Record<string, number> = {
   all: 1.0,
   scalp: 0.5,
@@ -37,14 +37,9 @@ function roundTo(value: number, decimals: number): string {
   return value.toFixed(decimals);
 }
 
-/**
- * Check if the signal's mode matches the configured trading mode filter.
- * "all" and "position" accept all signals.
- * Other modes require the signal's mode field to contain the config mode keyword.
- */
 function modeAllowed(signalMode: string | null | undefined, tradingMode: string): boolean {
   if (tradingMode === "all" || tradingMode === "position") return true;
-  if (!signalMode) return true; // no mode on signal — don't filter out
+  if (!signalMode) return true;
   return signalMode.toLowerCase().includes(tradingMode.toLowerCase());
 }
 
@@ -85,7 +80,6 @@ export async function executeSignal(signal: Signal): Promise<void> {
     return;
   }
 
-  // Trading mode filter
   if (!modeAllowed(signal.mode, config.tradingMode)) {
     logger.info(
       { signalId: signal.id, signalMode: signal.mode, tradingMode: config.tradingMode },
@@ -94,13 +88,29 @@ export async function executeSignal(signal: Signal): Promise<void> {
     return;
   }
 
-  // Long-only guard
   if (config.longOnly && signal.dir === "SHORT") {
     logger.info({ signalId: signal.id }, "Long-only mode: skipping SHORT signal");
     return;
   }
 
-  // Max open trades guard
+  // ── Regime gating ────────────────────────────────────────────────────────
+  if (config.regimeGatingEnabled) {
+    try {
+      const market = await getMarketStatus();
+      if (config.blockOnRiskOff && market.regime === "RISK_OFF") {
+        logger.info(
+          { signalId: signal.id, regime: market.regime, btcD: market.btcDominance, stableD: market.stableDominance },
+          "Regime gating: RISK_OFF detected — skipping signal"
+        );
+        return;
+      }
+      logger.debug({ signalId: signal.id, regime: market.regime }, "Regime gating: regime OK, allowing signal");
+    } catch (err) {
+      logger.warn({ signalId: signal.id, err }, "Regime gating: market status unavailable, allowing signal through");
+    }
+  }
+
+  // ── Max open trades ───────────────────────────────────────────────────────
   const [openCountRow] = await db
     .select({ c: count() })
     .from(tradesTable)
@@ -111,7 +121,7 @@ export async function executeSignal(signal: Signal): Promise<void> {
     return;
   }
 
-  // Duplicate symbol guard
+  // ── Duplicate symbol guard ────────────────────────────────────────────────
   const [existingTrade] = await db
     .select({ id: tradesTable.id })
     .from(tradesTable)
@@ -124,15 +134,15 @@ export async function executeSignal(signal: Signal): Promise<void> {
     .limit(1);
 
   if (existingTrade) {
-    logger.info({ signalId: signal.id, symbol: signal.symbol, existingTradeId: existingTrade.id }, "Duplicate position guard: already in trade for this symbol, skipping");
+    logger.info({ signalId: signal.id, symbol: signal.symbol, existingTradeId: existingTrade.id }, "Duplicate position guard: already in trade, skipping");
     return;
   }
 
-  // Cooldown guard
+  // ── Cooldown guard ────────────────────────────────────────────────────────
   if (config.cooldownMinutes > 0) {
     const cutoff = new Date(Date.now() - config.cooldownMinutes * 60_000);
     const [recentTrade] = await db
-      .select({ id: tradesTable.id, createdAt: tradesTable.createdAt })
+      .select({ id: tradesTable.id })
       .from(tradesTable)
       .where(
         and(
@@ -143,17 +153,12 @@ export async function executeSignal(signal: Signal): Promise<void> {
       .limit(1);
 
     if (recentTrade) {
-      logger.info(
-        { signalId: signal.id, symbol: signal.symbol, cooldownMinutes: config.cooldownMinutes },
-        "Cooldown active, skipping"
-      );
+      logger.info({ signalId: signal.id, symbol: signal.symbol, cooldownMinutes: config.cooldownMinutes }, "Cooldown active, skipping");
       return;
     }
   }
 
-  // Determine actual position size:
-  // 1. If compounding enabled and compoundBalance is set, use that as base
-  // 2. Apply mode size multiplier
+  // ── Position sizing ───────────────────────────────────────────────────────
   const baseSize = config.compoundingEnabled && config.compoundBalance != null
     ? config.compoundBalance
     : config.positionSizeUsdt;
@@ -204,7 +209,7 @@ export async function executeSignal(signal: Signal): Promise<void> {
 
     logger.info(
       { tradeId: trade.id, symbol: signal.symbol, side, entryPrice, quantity, effectivePositionSize },
-      "Paper trade recorded with live price"
+      "Paper trade recorded"
     );
     notifyTradeOpened({
       symbol: signal.symbol,
@@ -288,26 +293,24 @@ export async function executeSignal(signal: Signal): Promise<void> {
         }
       }
 
-      const tps = [
+      for (const tp of [
         { enabled: config.tp1Enabled, price: signal.tp1, pct: config.tp1Pct, key: "tp1OrderId" as const },
         { enabled: config.tp2Enabled, price: signal.tp2, pct: config.tp2Pct, key: "tp2OrderId" as const },
         { enabled: config.tp3Enabled, price: signal.tp3, pct: config.tp3Pct, key: "tp3OrderId" as const },
-      ];
-      for (const tp of tps) {
+      ]) {
         if (tp.enabled && tp.price) {
           try {
-            const tpQty = (quantity * (tp.pct / 100)).toFixed(8);
             const tpOrder = await placePriceTriggeredOrder({
               currencyPair: gateSymbol,
               triggerPrice: tp.price.toFixed(8),
               triggerRule: ">=",
               side: "sell",
-              amount: tpQty,
+              amount: (quantity * (tp.pct / 100)).toFixed(8),
               orderPrice: tp.price.toFixed(8),
             });
             tpOrders[tp.key] = tpOrder.id.toString();
           } catch (err) {
-            logger.warn({ tradeId: trade.id, err }, `Failed to place ${tp.key} order`);
+            logger.warn({ tradeId: trade.id, err }, `Failed to place ${tp.key}`);
           }
         }
       }
@@ -324,30 +327,28 @@ export async function executeSignal(signal: Signal): Promise<void> {
           });
           tpOrders.slOrderId = slOrder.id.toString();
         } catch (err) {
-          logger.warn({ tradeId: trade.id, err }, "Failed to place SHORT SL order");
+          logger.warn({ tradeId: trade.id, err }, "Failed to place SHORT SL");
         }
       }
 
-      const tps = [
+      for (const tp of [
         { enabled: config.tp1Enabled, price: signal.tp1, pct: config.tp1Pct, key: "tp1OrderId" as const },
         { enabled: config.tp2Enabled, price: signal.tp2, pct: config.tp2Pct, key: "tp2OrderId" as const },
         { enabled: config.tp3Enabled, price: signal.tp3, pct: config.tp3Pct, key: "tp3OrderId" as const },
-      ];
-      for (const tp of tps) {
+      ]) {
         if (tp.enabled && tp.price) {
           try {
-            const tpQty = (quantity * (tp.pct / 100)).toFixed(8);
             const tpOrder = await placePriceTriggeredOrder({
               currencyPair: gateSymbol,
               triggerPrice: tp.price.toFixed(8),
               triggerRule: "<=",
               side: "buy",
-              amount: tpQty,
+              amount: (quantity * (tp.pct / 100)).toFixed(8),
               orderPrice: tp.price.toFixed(8),
             });
             tpOrders[tp.key] = tpOrder.id.toString();
           } catch (err) {
-            logger.warn({ tradeId: trade.id, err }, `Failed to place SHORT ${tp.key} order`);
+            logger.warn({ tradeId: trade.id, err }, `Failed to place SHORT ${tp.key}`);
           }
         }
       }

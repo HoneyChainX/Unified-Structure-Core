@@ -160,6 +160,38 @@ paths:
               schema:
                 $ref: "#/components/schemas/BotStatus"
 
+  /bot/analytics:
+    get:
+      operationId: getBotAnalytics
+      tags: [bot]
+      summary: Signal performance breakdown by grade, mode, tf, symbol, direction
+      responses:
+        "200":
+          description: Analytics breakdown
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotAnalytics"
+
+  /bot/backtest:
+    post:
+      operationId: runBacktest
+      tags: [bot]
+      summary: Replay signal filter over all historical signals and compute hypothetical equity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BacktestRequest"
+      responses:
+        "200":
+          description: Backtest result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BacktestResult"
+
   /bot/performance:
     get:
       operationId: getBotPerformance
@@ -642,6 +674,10 @@ components:
         compoundBalance:
           type: number
           nullable: true
+        regimeGatingEnabled:
+          type: boolean
+        blockOnRiskOff:
+          type: boolean
         positionSizeUsdt:
           type: number
         minConfW:
@@ -684,6 +720,8 @@ components:
         - longOnly
         - tradingMode
         - compoundingEnabled
+        - regimeGatingEnabled
+        - blockOnRiskOff
         - slEnabled
         - tp1Enabled
         - tp2Enabled
@@ -709,6 +747,10 @@ components:
         compoundBalance:
           type: number
           nullable: true
+        regimeGatingEnabled:
+          type: boolean
+        blockOnRiskOff:
+          type: boolean
         positionSizeUsdt:
           type: number
         minConfW:
@@ -996,3 +1038,209 @@ components:
         - regime
         - regimeScore
         - lastUpdated
+
+    AnalyticsDimEntry:
+      type: object
+      properties:
+        label:
+          type: string
+        count:
+          type: integer
+        wins:
+          type: integer
+        losses:
+          type: integer
+        winRate:
+          type: number
+          nullable: true
+        totalPnl:
+          type: number
+        avgPnl:
+          type: number
+          nullable: true
+        bestPnl:
+          type: number
+          nullable: true
+        worstPnl:
+          type: number
+          nullable: true
+      required:
+        - label
+        - count
+        - wins
+        - losses
+        - totalPnl
+
+    BotAnalytics:
+      type: object
+      properties:
+        totalClosed:
+          type: integer
+        byGrade:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnalyticsDimEntry"
+        byMode:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnalyticsDimEntry"
+        byTf:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnalyticsDimEntry"
+        bySymbol:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnalyticsDimEntry"
+        byDir:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnalyticsDimEntry"
+        byCloseReason:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnalyticsDimEntry"
+      required:
+        - totalClosed
+        - byGrade
+        - byMode
+        - byTf
+        - bySymbol
+        - byDir
+        - byCloseReason
+
+    BacktestRequest:
+      type: object
+      properties:
+        minConfW:
+          type: number
+        minGrade:
+          type: string
+        tradingMode:
+          type: string
+        longOnly:
+          type: boolean
+        allowedSymbols:
+          type: string
+        positionSizeUsdt:
+          type: number
+
+    BacktestTrade:
+      type: object
+      properties:
+        signalId:
+          type: integer
+        receivedAt:
+          type: string
+          format: date-time
+        symbol:
+          type: string
+        dir:
+          type: string
+        grade:
+          type: string
+          nullable: true
+        mode:
+          type: string
+          nullable: true
+        tf:
+          type: string
+        confW:
+          type: number
+          nullable: true
+        rr:
+          type: number
+          nullable: true
+        entryPrice:
+          type: number
+          nullable: true
+        slPrice:
+          type: number
+          nullable: true
+        tp1Price:
+          type: number
+          nullable: true
+        hypotheticalWin:
+          type: number
+          nullable: true
+        hypotheticalLoss:
+          type: number
+          nullable: true
+        actualPnl:
+          type: number
+          nullable: true
+        hasActual:
+          type: boolean
+        actualCloseReason:
+          type: string
+          nullable: true
+      required:
+        - signalId
+        - receivedAt
+        - symbol
+        - dir
+        - tf
+        - hasActual
+
+    BacktestScenario:
+      type: object
+      properties:
+        totalPnl:
+          type: number
+        winRate:
+          type: number
+          nullable: true
+        tradeCount:
+          type: integer
+        equityCurve:
+          type: array
+          items:
+            type: object
+            properties:
+              idx:
+                type: integer
+              pnl:
+                type: number
+            required:
+              - idx
+              - pnl
+      required:
+        - totalPnl
+        - tradeCount
+        - equityCurve
+
+    BacktestResult:
+      type: object
+      properties:
+        config:
+          type: object
+        totalSignals:
+          type: integer
+        matchedSignals:
+          type: integer
+        filterRate:
+          type: number
+        trades:
+          type: array
+          items:
+            $ref: "#/components/schemas/BacktestTrade"
+        scenarios:
+          type: object
+          properties:
+            optimistic:
+              $ref: "#/components/schemas/BacktestScenario"
+            pessimistic:
+              $ref: "#/components/schemas/BacktestScenario"
+            actual:
+              $ref: "#/components/schemas/BacktestScenario"
+          required:
+            - optimistic
+            - pessimistic
+            - actual
+      required:
+        - config
+        - totalSignals
+        - matchedSignals
+        - filterRate
+        - trades
+        - scenarios

@@ -181,6 +181,8 @@ export const GetBotConfigResponse = zod.object({
     .describe("all | scalp | intraday | swing | position"),
   compoundingEnabled: zod.boolean(),
   compoundBalance: zod.number().nullish(),
+  regimeGatingEnabled: zod.boolean(),
+  blockOnRiskOff: zod.boolean(),
   positionSizeUsdt: zod.number(),
   minConfW: zod.number(),
   minGrade: zod.string(),
@@ -207,6 +209,8 @@ export const UpdateBotConfigBody = zod.object({
   tradingMode: zod.string().optional(),
   compoundingEnabled: zod.boolean().optional(),
   compoundBalance: zod.number().nullish(),
+  regimeGatingEnabled: zod.boolean().optional(),
+  blockOnRiskOff: zod.boolean().optional(),
   positionSizeUsdt: zod.number().optional(),
   minConfW: zod.number().optional(),
   minGrade: zod.string().optional(),
@@ -232,6 +236,8 @@ export const UpdateBotConfigResponse = zod.object({
     .describe("all | scalp | intraday | swing | position"),
   compoundingEnabled: zod.boolean(),
   compoundBalance: zod.number().nullish(),
+  regimeGatingEnabled: zod.boolean(),
+  blockOnRiskOff: zod.boolean(),
   positionSizeUsdt: zod.number(),
   minConfW: zod.number(),
   minGrade: zod.string(),
@@ -259,6 +265,166 @@ export const GetBotStatusResponse = zod.object({
   totalTrades: zod.number(),
   apiConfigured: zod.boolean(),
   lastSyncAt: zod.coerce.date().nullish(),
+});
+
+/**
+ * @summary Signal performance breakdown by grade, mode, tf, symbol, direction
+ */
+export const GetBotAnalyticsResponse = zod.object({
+  totalClosed: zod.number(),
+  byGrade: zod.array(
+    zod.object({
+      label: zod.string(),
+      count: zod.number(),
+      wins: zod.number(),
+      losses: zod.number(),
+      winRate: zod.number().nullish(),
+      totalPnl: zod.number(),
+      avgPnl: zod.number().nullish(),
+      bestPnl: zod.number().nullish(),
+      worstPnl: zod.number().nullish(),
+    }),
+  ),
+  byMode: zod.array(
+    zod.object({
+      label: zod.string(),
+      count: zod.number(),
+      wins: zod.number(),
+      losses: zod.number(),
+      winRate: zod.number().nullish(),
+      totalPnl: zod.number(),
+      avgPnl: zod.number().nullish(),
+      bestPnl: zod.number().nullish(),
+      worstPnl: zod.number().nullish(),
+    }),
+  ),
+  byTf: zod.array(
+    zod.object({
+      label: zod.string(),
+      count: zod.number(),
+      wins: zod.number(),
+      losses: zod.number(),
+      winRate: zod.number().nullish(),
+      totalPnl: zod.number(),
+      avgPnl: zod.number().nullish(),
+      bestPnl: zod.number().nullish(),
+      worstPnl: zod.number().nullish(),
+    }),
+  ),
+  bySymbol: zod.array(
+    zod.object({
+      label: zod.string(),
+      count: zod.number(),
+      wins: zod.number(),
+      losses: zod.number(),
+      winRate: zod.number().nullish(),
+      totalPnl: zod.number(),
+      avgPnl: zod.number().nullish(),
+      bestPnl: zod.number().nullish(),
+      worstPnl: zod.number().nullish(),
+    }),
+  ),
+  byDir: zod.array(
+    zod.object({
+      label: zod.string(),
+      count: zod.number(),
+      wins: zod.number(),
+      losses: zod.number(),
+      winRate: zod.number().nullish(),
+      totalPnl: zod.number(),
+      avgPnl: zod.number().nullish(),
+      bestPnl: zod.number().nullish(),
+      worstPnl: zod.number().nullish(),
+    }),
+  ),
+  byCloseReason: zod.array(
+    zod.object({
+      label: zod.string(),
+      count: zod.number(),
+      wins: zod.number(),
+      losses: zod.number(),
+      winRate: zod.number().nullish(),
+      totalPnl: zod.number(),
+      avgPnl: zod.number().nullish(),
+      bestPnl: zod.number().nullish(),
+      worstPnl: zod.number().nullish(),
+    }),
+  ),
+});
+
+/**
+ * @summary Replay signal filter over all historical signals and compute hypothetical equity
+ */
+export const RunBacktestBody = zod.object({
+  minConfW: zod.number().optional(),
+  minGrade: zod.string().optional(),
+  tradingMode: zod.string().optional(),
+  longOnly: zod.boolean().optional(),
+  allowedSymbols: zod.string().optional(),
+  positionSizeUsdt: zod.number().optional(),
+});
+
+export const RunBacktestResponse = zod.object({
+  config: zod.object({}).passthrough(),
+  totalSignals: zod.number(),
+  matchedSignals: zod.number(),
+  filterRate: zod.number(),
+  trades: zod.array(
+    zod.object({
+      signalId: zod.number(),
+      receivedAt: zod.coerce.date(),
+      symbol: zod.string(),
+      dir: zod.string(),
+      grade: zod.string().nullish(),
+      mode: zod.string().nullish(),
+      tf: zod.string(),
+      confW: zod.number().nullish(),
+      rr: zod.number().nullish(),
+      entryPrice: zod.number().nullish(),
+      slPrice: zod.number().nullish(),
+      tp1Price: zod.number().nullish(),
+      hypotheticalWin: zod.number().nullish(),
+      hypotheticalLoss: zod.number().nullish(),
+      actualPnl: zod.number().nullish(),
+      hasActual: zod.boolean(),
+      actualCloseReason: zod.string().nullish(),
+    }),
+  ),
+  scenarios: zod.object({
+    optimistic: zod.object({
+      totalPnl: zod.number(),
+      winRate: zod.number().nullish(),
+      tradeCount: zod.number(),
+      equityCurve: zod.array(
+        zod.object({
+          idx: zod.number(),
+          pnl: zod.number(),
+        }),
+      ),
+    }),
+    pessimistic: zod.object({
+      totalPnl: zod.number(),
+      winRate: zod.number().nullish(),
+      tradeCount: zod.number(),
+      equityCurve: zod.array(
+        zod.object({
+          idx: zod.number(),
+          pnl: zod.number(),
+        }),
+      ),
+    }),
+    actual: zod.object({
+      totalPnl: zod.number(),
+      winRate: zod.number().nullish(),
+      tradeCount: zod.number(),
+      equityCurve: zod.array(
+        zod.object({
+          idx: zod.number(),
+          pnl: zod.number(),
+        }),
+      ),
+    }),
+  }),
 });
 
 /**

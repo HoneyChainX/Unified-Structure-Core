@@ -6,6 +6,15 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from "./analyticsDimEntry";
+export * from "./backtestRequest";
+export * from "./backtestResult";
+export * from "./backtestResultConfig";
+export * from "./backtestResultScenarios";
+export * from "./backtestScenario";
+export * from "./backtestScenarioEquityCurveItem";
+export * from "./backtestTrade";
+export * from "./botAnalytics";
 export * from "./botConfig";
 export * from "./botConfigPatch";
 export * from "./botPerformance";

@@ -155,6 +155,8 @@ export interface BotConfig {
   tradingMode: string;
   compoundingEnabled: boolean;
   compoundBalance?: number | null;
+  regimeGatingEnabled: boolean;
+  blockOnRiskOff: boolean;
   positionSizeUsdt: number;
   minConfW: number;
   minGrade: string;
@@ -178,6 +180,8 @@ export interface BotConfigPatch {
   tradingMode?: string;
   compoundingEnabled?: boolean;
   compoundBalance?: number | null;
+  regimeGatingEnabled?: boolean;
+  blockOnRiskOff?: boolean;
   positionSizeUsdt?: number;
   minConfW?: number;
   minGrade?: string;
@@ -310,6 +314,86 @@ export interface MarketStatus {
   latestRotation?: string | null;
   latestRotScore?: number | null;
   lastUpdated: string;
+}
+
+export interface AnalyticsDimEntry {
+  label: string;
+  count: number;
+  wins: number;
+  losses: number;
+  winRate?: number | null;
+  totalPnl: number;
+  avgPnl?: number | null;
+  bestPnl?: number | null;
+  worstPnl?: number | null;
+}
+
+export interface BotAnalytics {
+  totalClosed: number;
+  byGrade: AnalyticsDimEntry[];
+  byMode: AnalyticsDimEntry[];
+  byTf: AnalyticsDimEntry[];
+  bySymbol: AnalyticsDimEntry[];
+  byDir: AnalyticsDimEntry[];
+  byCloseReason: AnalyticsDimEntry[];
+}
+
+export interface BacktestRequest {
+  minConfW?: number;
+  minGrade?: string;
+  tradingMode?: string;
+  longOnly?: boolean;
+  allowedSymbols?: string;
+  positionSizeUsdt?: number;
+}
+
+export interface BacktestTrade {
+  signalId: number;
+  receivedAt: string;
+  symbol: string;
+  dir: string;
+  grade?: string | null;
+  mode?: string | null;
+  tf: string;
+  confW?: number | null;
+  rr?: number | null;
+  entryPrice?: number | null;
+  slPrice?: number | null;
+  tp1Price?: number | null;
+  hypotheticalWin?: number | null;
+  hypotheticalLoss?: number | null;
+  actualPnl?: number | null;
+  hasActual: boolean;
+  actualCloseReason?: string | null;
+}
+
+export type BacktestScenarioEquityCurveItem = {
+  idx: number;
+  pnl: number;
+};
+
+export interface BacktestScenario {
+  totalPnl: number;
+  winRate?: number | null;
+  tradeCount: number;
+  equityCurve: BacktestScenarioEquityCurveItem[];
+}
+
+export type BacktestResultConfig = { [key: string]: unknown };
+
+export type BacktestResultScenarios = {
+  optimistic: BacktestScenario;
+  pessimistic: BacktestScenario;
+  actual: BacktestScenario;
+};
+
+export interface BacktestResult {
+  config: BacktestResultConfig;
+  totalSignals: number;
+  matchedSignals: number;
+  filterRate: number;
+  trades: BacktestTrade[];
+  scenarios: BacktestResultScenarios;
 }
 
 export type ListSignalsParams = {

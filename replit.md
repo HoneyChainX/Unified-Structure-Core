@@ -88,6 +88,18 @@ Required secrets for live trading: `GATEIO_API_KEY`, `GATEIO_API_SECRET`
 - `artifacts/dashboard/src/pages/bot.tsx` — Bot control page
 - `artifacts/api-server/src/services/sync.ts` — Keep-alive trade sync loop (30s interval)
 
+## Bot Features (extended)
+
+- **Regime gating** — optional filter in executor: if `regimeGatingEnabled`, fetches live CoinGecko regime (cached 60s) before each trade; if regime = RISK_OFF and `blockOnRiskOff = true`, signal is refused
+- **Signal analytics** (`/analytics`) — breakdown of closed trade performance by grade, mode, timeframe, symbol, direction, and close reason; bar charts + sortable tables
+- **Backtest replay** (`/backtest`) — POST `/api/bot/backtest` with filter params; applies filter over all stored triggered signals; for signals with real closed trades uses actual P&L; for all others computes optimistic (all TP1 hit) and pessimistic (all SL hit) equity curve bounds; shows matched signal table with per-signal hypothetical ranges
+
+## Where things live (extended v2)
+
+- `artifacts/dashboard/src/pages/analytics.tsx` — Signal analytics page
+- `artifacts/dashboard/src/pages/backtest.tsx` — Backtest replay page
+- `artifacts/api-server/src/routes/bot.ts` — `/bot/analytics` GET, `/bot/backtest` POST endpoints
+
 ## User preferences
 
 _Populate as you build — explicit user instructions worth remembering across sessions._

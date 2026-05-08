@@ -819,6 +819,52 @@ export function BotPage() {
             </button>
           </div>
 
+          {/* Regime Gating — spans full width */}
+          <div className={`md:col-span-2 border transition-colors ${field("regimeGatingEnabled", false) ? "border-orange-500/40 bg-orange-500/5" : "border-border bg-secondary/30"}`}>
+            <div className="flex items-center justify-between p-4">
+              <div className="flex items-center gap-3">
+                <Globe className={`w-4 h-4 ${field("regimeGatingEnabled", false) ? "text-orange-400" : "text-muted-foreground"}`} />
+                <div>
+                  <div className="text-sm font-bold flex items-center gap-2">
+                    Regime Gating
+                    {field("regimeGatingEnabled", false) && (
+                      <span className="text-xs font-normal text-orange-400 border border-orange-500/30 px-1.5 py-0.5">ACTIVE</span>
+                    )}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Skip signals when market regime is unfavorable — uses live CoinGecko data (cached 60s)
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => set("regimeGatingEnabled", !field("regimeGatingEnabled", false))}
+                className={`relative w-12 h-6 rounded-full border transition-colors ${field("regimeGatingEnabled", false) ? "border-orange-500 bg-orange-500/20" : "border-border bg-secondary"}`}
+              >
+                <span className={`absolute top-0.5 w-5 h-5 rounded-full transition-all ${field("regimeGatingEnabled", false) ? "left-6 bg-orange-400" : "left-0.5 bg-muted-foreground/50"}`} />
+              </button>
+            </div>
+            {field("regimeGatingEnabled", false) && (
+              <div className="px-4 pb-4 pt-0 border-t border-orange-500/20">
+                <div className="flex items-center justify-between mt-3">
+                  <div>
+                    <div className="text-sm font-bold mb-0.5 flex items-center gap-2">
+                      <ShieldAlert className="w-3.5 h-3.5 text-red-400" />Block on RISK_OFF regime
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      When BTC.D−Stable.D &lt; 38 or Stable.D &gt; 14% — refuse all signals (stablecoin flight = market fear)
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => set("blockOnRiskOff", !field("blockOnRiskOff", true))}
+                    className={`relative w-12 h-6 rounded-full border transition-colors ${field("blockOnRiskOff", true) ? "border-red-500 bg-red-500/20" : "border-border bg-secondary"}`}
+                  >
+                    <span className={`absolute top-0.5 w-5 h-5 rounded-full transition-all ${field("blockOnRiskOff", true) ? "left-6 bg-red-400" : "left-0.5 bg-muted-foreground/50"}`} />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Position Size */}
           <div className="space-y-2">
             <label className="text-xs text-muted-foreground tracking-widest flex items-center gap-2">

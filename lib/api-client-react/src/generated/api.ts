@@ -17,6 +17,9 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  BacktestRequest,
+  BacktestResult,
+  BotAnalytics,
   BotConfig,
   BotConfigPatch,
   BotPerformance,
@@ -687,6 +690,167 @@ export function useGetBotStatus<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Signal performance breakdown by grade, mode, tf, symbol, direction
+ */
+export const getGetBotAnalyticsUrl = () => {
+  return `/api/bot/analytics`;
+};
+
+export const getBotAnalytics = async (
+  options?: RequestInit,
+): Promise<BotAnalytics> => {
+  return customFetch<BotAnalytics>(getGetBotAnalyticsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetBotAnalyticsQueryKey = () => {
+  return [`/api/bot/analytics`] as const;
+};
+
+export const getGetBotAnalyticsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getBotAnalytics>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getBotAnalytics>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetBotAnalyticsQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getBotAnalytics>>> = ({
+    signal,
+  }) => getBotAnalytics({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getBotAnalytics>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetBotAnalyticsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getBotAnalytics>>
+>;
+export type GetBotAnalyticsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Signal performance breakdown by grade, mode, tf, symbol, direction
+ */
+
+export function useGetBotAnalytics<
+  TData = Awaited<ReturnType<typeof getBotAnalytics>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getBotAnalytics>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetBotAnalyticsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Replay signal filter over all historical signals and compute hypothetical equity
+ */
+export const getRunBacktestUrl = () => {
+  return `/api/bot/backtest`;
+};
+
+export const runBacktest = async (
+  backtestRequest: BacktestRequest,
+  options?: RequestInit,
+): Promise<BacktestResult> => {
+  return customFetch<BacktestResult>(getRunBacktestUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(backtestRequest),
+  });
+};
+
+export const getRunBacktestMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof runBacktest>>,
+    TError,
+    { data: BodyType<BacktestRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof runBacktest>>,
+  TError,
+  { data: BodyType<BacktestRequest> },
+  TContext
+> => {
+  const mutationKey = ["runBacktest"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof runBacktest>>,
+    { data: BodyType<BacktestRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return runBacktest(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RunBacktestMutationResult = NonNullable<
+  Awaited<ReturnType<typeof runBacktest>>
+>;
+export type RunBacktestMutationBody = BodyType<BacktestRequest>;
+export type RunBacktestMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Replay signal filter over all historical signals and compute hypothetical equity
+ */
+export const useRunBacktest = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof runBacktest>>,
+    TError,
+    { data: BodyType<BacktestRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof runBacktest>>,
+  TError,
+  { data: BodyType<BacktestRequest> },
+  TContext
+> => {
+  return useMutation(getRunBacktestMutationOptions(options));
+};
 
 /**
  * @summary Get bot performance statistics

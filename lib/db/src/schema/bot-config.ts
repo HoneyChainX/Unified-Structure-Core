@@ -20,7 +20,11 @@ export const botConfigTable = pgTable("bot_config", {
 
   // Compounding: reinvest profits into next position size
   compoundingEnabled: boolean("compounding_enabled").notNull().default(false),
-  compoundBalance: real("compound_balance"), // null = not initialized; set to positionSizeUsdt on first enable
+  compoundBalance: real("compound_balance"),
+
+  // Regime gating: skip signals when market is in a bad regime
+  regimeGatingEnabled: boolean("regime_gating_enabled").notNull().default(false),
+  blockOnRiskOff: boolean("block_on_risk_off").notNull().default(true),
 
   maxOpenTrades: integer("max_open_trades").notNull().default(3),
   cooldownMinutes: integer("cooldown_minutes").notNull().default(0),

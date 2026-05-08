@@ -15,6 +15,8 @@ export interface BotConfig {
   tradingMode: string;
   compoundingEnabled: boolean;
   compoundBalance?: number | null;
+  regimeGatingEnabled: boolean;
+  blockOnRiskOff: boolean;
   positionSizeUsdt: number;
   minConfW: number;
   minGrade: string;

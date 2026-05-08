@@ -1,8 +1,16 @@
 import { Link, useLocation } from "wouter";
-import { Activity, LayoutDashboard, List, Bot } from "lucide-react";
+import { Activity, LayoutDashboard, List, Bot, BarChart2, FlaskConical } from "lucide-react";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
+
+  const navItems = [
+    { href: "/", icon: LayoutDashboard, label: "Dashboard", active: location === "/" },
+    { href: "/signals", icon: List, label: "Signals", active: location.startsWith("/signals") || location.startsWith("/signal/") },
+    { href: "/bot", icon: Bot, label: "Bot", active: location === "/bot" },
+    { href: "/analytics", icon: BarChart2, label: "Analytics", active: location === "/analytics" },
+    { href: "/backtest", icon: FlaskConical, label: "Backtest", active: location === "/backtest" },
+  ];
 
   return (
     <div className="flex h-screen w-full bg-background text-foreground dark overflow-hidden">
@@ -12,29 +20,22 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <Activity className="w-6 h-6 text-primary" />
           <span className="hidden md:block ml-3 font-bold tracking-tight">UNIFIED<span className="text-primary">v1</span></span>
         </div>
-        
-        <nav className="flex-1 py-6 flex flex-col gap-2 px-2 md:px-4">
-          <Link 
-            href="/" 
-            className={`flex items-center gap-3 px-2 md:px-3 py-2.5 rounded-md transition-colors ${location === "/" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}
-          >
-            <LayoutDashboard className="w-5 h-5 shrink-0" />
-            <span className="hidden md:block text-sm font-medium">Dashboard</span>
-          </Link>
-          <Link 
-            href="/signals" 
-            className={`flex items-center gap-3 px-2 md:px-3 py-2.5 rounded-md transition-colors ${location.startsWith("/signals") || location.startsWith("/signal/") ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}
-          >
-            <List className="w-5 h-5 shrink-0" />
-            <span className="hidden md:block text-sm font-medium">Signals</span>
-          </Link>
-          <Link 
-            href="/bot" 
-            className={`flex items-center gap-3 px-2 md:px-3 py-2.5 rounded-md transition-colors ${location.startsWith("/bot") ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}
-          >
-            <Bot className="w-5 h-5 shrink-0" />
-            <span className="hidden md:block text-sm font-medium">Bot</span>
-          </Link>
+
+        <nav className="flex-1 py-6 flex flex-col gap-1 px-2 md:px-4">
+          {navItems.map(({ href, icon: Icon, label, active }) => (
+            <Link
+              key={href}
+              href={href}
+              className={`flex items-center gap-3 px-2 md:px-3 py-2.5 rounded-md transition-colors ${
+                active
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+              }`}
+            >
+              <Icon className="w-5 h-5 shrink-0" />
+              <span className="hidden md:block text-sm font-medium">{label}</span>
+            </Link>
+          ))}
         </nav>
       </aside>
 
