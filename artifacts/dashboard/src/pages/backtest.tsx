@@ -108,7 +108,7 @@ export function BacktestPage() {
   const [filterDir, setFilterDir] = useState<"" | "LONG" | "SHORT">("");
 
   const mutation = useMutation({
-    mutationFn: (p: typeof params) => runBacktest({ data: p ?? {} }),
+    mutationFn: (p: typeof params) => runBacktest(p ?? {}),
     onSuccess: (data) => setResult(data as BtResult),
   });
 

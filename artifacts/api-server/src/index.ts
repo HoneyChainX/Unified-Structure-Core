@@ -1,6 +1,8 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { startSyncLoop } from "./services/sync";
+import { startScalperSyncLoop } from "./services/scalper-sync";
+import { startScalperLoop } from "./services/scalper-loop";
 
 const rawPort = process.env["PORT"];
 
@@ -24,4 +26,6 @@ app.listen(port, (err) => {
 
   logger.info({ port }, "Server listening");
   startSyncLoop(30_000);
+  startScalperSyncLoop(30_000);
+  startScalperLoop(5 * 60_000);
 });

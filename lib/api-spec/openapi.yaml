@@ -16,6 +16,8 @@ tags:
     description: Trading bot operations
   - name: market
     description: Market status and spread analysis
+  - name: scalper
+    description: High-frequency scalper bot operations
 paths:
   /healthz:
     get:
@@ -159,6 +161,148 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BotStatus"
+
+  /scalper/config:
+    get:
+      operationId: getScalperConfig
+      tags: [scalper]
+      summary: Get scalper bot configuration
+      responses:
+        "200":
+          description: Scalper config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScalperConfig"
+    put:
+      operationId: updateScalperConfig
+      tags: [scalper]
+      summary: Update scalper bot configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScalperConfigPatch"
+      responses:
+        "200":
+          description: Updated config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScalperConfig"
+
+  /scalper/status:
+    get:
+      operationId: getScalperStatus
+      tags: [scalper]
+      summary: Get scalper bot runtime status
+      responses:
+        "200":
+          description: Scalper status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScalperStatus"
+
+  /scalper/trades:
+    get:
+      operationId: listScalperTrades
+      tags: [scalper]
+      summary: List scalper trades
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+        - in: query
+          name: offset
+          schema:
+            type: integer
+        - in: query
+          name: status
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of scalper trades
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ScalperTrade"
+
+  /scalper/trades/{id}/cancel:
+    delete:
+      operationId: cancelScalperTrade
+      tags: [scalper]
+      summary: Cancel an open scalper trade
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                required:
+                  - ok
+
+  /scalper/performance:
+    get:
+      operationId: getScalperPerformance
+      tags: [scalper]
+      summary: Get scalper bot performance statistics
+      responses:
+        "200":
+          description: Performance stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScalperPerformance"
+
+  /scalper/scan:
+    get:
+      operationId: getScalperScan
+      tags: [scalper]
+      summary: Get current market scan results for top 5 USDT symbols
+      responses:
+        "200":
+          description: Scan result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScalperScanResult"
+
+  /scalper/scan/trigger:
+    post:
+      operationId: triggerScalperScan
+      tags: [scalper]
+      summary: Manually trigger a scalper scan cycle
+      responses:
+        "200":
+          description: Triggered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  message:
+                    type: string
+                required:
+                  - ok
+                  - message
 
   /bot/analytics:
     get:
@@ -1244,3 +1388,275 @@ components:
         - filterRate
         - trades
         - scenarios
+
+    ScalperConfig:
+      type: object
+      properties:
+        id:
+          type: integer
+        enabled:
+          type: boolean
+        paperMode:
+          type: boolean
+        positionSizeUsdt:
+          type: number
+        targetProfitUsdt:
+          type: number
+        slPct:
+          type: number
+        maxOpenTrades:
+          type: integer
+        cooldownMinutes:
+          type: integer
+        bbPeriod:
+          type: integer
+        bbStdDev:
+          type: number
+        rsiPeriod:
+          type: integer
+        rsiOversold:
+          type: number
+        rsiOverbought:
+          type: number
+        volumeSpikeMultiplier:
+          type: number
+        compoundingEnabled:
+          type: boolean
+        compoundBalance:
+          type: number
+          nullable: true
+        longOnly:
+          type: boolean
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - enabled
+        - paperMode
+        - positionSizeUsdt
+        - targetProfitUsdt
+        - slPct
+        - maxOpenTrades
+        - cooldownMinutes
+        - bbPeriod
+        - bbStdDev
+        - rsiPeriod
+        - rsiOversold
+        - rsiOverbought
+        - volumeSpikeMultiplier
+        - compoundingEnabled
+        - longOnly
+        - updatedAt
+
+    ScalperConfigPatch:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        paperMode:
+          type: boolean
+        positionSizeUsdt:
+          type: number
+        targetProfitUsdt:
+          type: number
+        slPct:
+          type: number
+        maxOpenTrades:
+          type: integer
+        cooldownMinutes:
+          type: integer
+        bbPeriod:
+          type: integer
+        bbStdDev:
+          type: number
+        rsiPeriod:
+          type: integer
+        rsiOversold:
+          type: number
+        rsiOverbought:
+          type: number
+        volumeSpikeMultiplier:
+          type: number
+        compoundingEnabled:
+          type: boolean
+        compoundBalance:
+          type: number
+          nullable: true
+        longOnly:
+          type: boolean
+
+    ScalperStatus:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        paperMode:
+          type: boolean
+        usdtBalance:
+          type: number
+          nullable: true
+        openTrades:
+          type: integer
+        totalTrades:
+          type: integer
+        apiConfigured:
+          type: boolean
+        lastSyncAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastScanAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastSignalCount:
+          type: integer
+      required:
+        - enabled
+        - paperMode
+        - usdtBalance
+        - openTrades
+        - totalTrades
+        - apiConfigured
+        - lastSignalCount
+
+    ScalperTrade:
+      type: object
+      properties:
+        id:
+          type: integer
+        symbol:
+          type: string
+        gateSymbol:
+          type: string
+        side:
+          type: string
+        status:
+          type: string
+        positionSizeUsdt:
+          type: number
+          nullable: true
+        quantity:
+          type: number
+          nullable: true
+        entryPrice:
+          type: number
+          nullable: true
+        livePrice:
+          type: number
+          nullable: true
+        tpPrice:
+          type: number
+          nullable: true
+        slPrice:
+          type: number
+          nullable: true
+        closePrice:
+          type: number
+          nullable: true
+        closeReason:
+          type: string
+          nullable: true
+        pnl:
+          type: number
+          nullable: true
+        paperMode:
+          type: boolean
+        bbUpper:
+          type: number
+          nullable: true
+        bbLower:
+          type: number
+          nullable: true
+        bbMid:
+          type: number
+          nullable: true
+        rsi:
+          type: number
+          nullable: true
+        volumeRatio:
+          type: number
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        closedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+        - id
+        - symbol
+        - gateSymbol
+        - side
+        - status
+        - paperMode
+        - createdAt
+
+    ScalperPerformance:
+      type: object
+      properties:
+        totalClosed:
+          type: integer
+        wins:
+          type: integer
+        losses:
+          type: integer
+        winRate:
+          type: number
+          nullable: true
+        totalPnl:
+          type: number
+        avgPnl:
+          type: number
+          nullable: true
+        bestPnl:
+          type: number
+          nullable: true
+        worstPnl:
+          type: number
+          nullable: true
+      required:
+        - totalClosed
+        - wins
+        - losses
+        - totalPnl
+
+    ScalperScanRow:
+      type: object
+      properties:
+        gateSymbol:
+          type: string
+        lastClose:
+          type: number
+        bbUpper:
+          type: number
+        bbLower:
+          type: number
+        bbMid:
+          type: number
+        rsi:
+          type: number
+        volumeRatio:
+          type: number
+        nearLower:
+          type: boolean
+        nearUpper:
+          type: boolean
+      required:
+        - gateSymbol
+
+    ScalperScanResult:
+      type: object
+      properties:
+        symbols:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScalperScanRow"
+        scannedAt:
+          type: string
+          format: date-time
+      required:
+        - symbols
+        - scannedAt

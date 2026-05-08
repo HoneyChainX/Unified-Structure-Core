@@ -24,17 +24,26 @@ import type {
   BotConfigPatch,
   BotPerformance,
   BotStatus,
+  CancelScalperTrade200,
   EquityCurve,
   HealthStatus,
+  ListScalperTradesParams,
   ListSignalsParams,
   ListTradesParams,
   MarketStatus,
+  ScalperConfig,
+  ScalperConfigPatch,
+  ScalperPerformance,
+  ScalperScanResult,
+  ScalperStatus,
+  ScalperTrade,
   Signal,
   SignalList,
   SignalStats,
   TestSignalRequest,
   Trade,
   TradeList,
+  TriggerScalperScan200,
   WebhookPayload,
 } from "./api.schemas";
 
@@ -690,6 +699,654 @@ export function useGetBotStatus<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Get scalper bot configuration
+ */
+export const getGetScalperConfigUrl = () => {
+  return `/api/scalper/config`;
+};
+
+export const getScalperConfig = async (
+  options?: RequestInit,
+): Promise<ScalperConfig> => {
+  return customFetch<ScalperConfig>(getGetScalperConfigUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetScalperConfigQueryKey = () => {
+  return [`/api/scalper/config`] as const;
+};
+
+export const getGetScalperConfigQueryOptions = <
+  TData = Awaited<ReturnType<typeof getScalperConfig>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getScalperConfig>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetScalperConfigQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getScalperConfig>>
+  > = ({ signal }) => getScalperConfig({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getScalperConfig>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetScalperConfigQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getScalperConfig>>
+>;
+export type GetScalperConfigQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get scalper bot configuration
+ */
+
+export function useGetScalperConfig<
+  TData = Awaited<ReturnType<typeof getScalperConfig>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getScalperConfig>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetScalperConfigQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Update scalper bot configuration
+ */
+export const getUpdateScalperConfigUrl = () => {
+  return `/api/scalper/config`;
+};
+
+export const updateScalperConfig = async (
+  scalperConfigPatch: ScalperConfigPatch,
+  options?: RequestInit,
+): Promise<ScalperConfig> => {
+  return customFetch<ScalperConfig>(getUpdateScalperConfigUrl(), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(scalperConfigPatch),
+  });
+};
+
+export const getUpdateScalperConfigMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateScalperConfig>>,
+    TError,
+    { data: BodyType<ScalperConfigPatch> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateScalperConfig>>,
+  TError,
+  { data: BodyType<ScalperConfigPatch> },
+  TContext
+> => {
+  const mutationKey = ["updateScalperConfig"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateScalperConfig>>,
+    { data: BodyType<ScalperConfigPatch> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return updateScalperConfig(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateScalperConfigMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateScalperConfig>>
+>;
+export type UpdateScalperConfigMutationBody = BodyType<ScalperConfigPatch>;
+export type UpdateScalperConfigMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Update scalper bot configuration
+ */
+export const useUpdateScalperConfig = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateScalperConfig>>,
+    TError,
+    { data: BodyType<ScalperConfigPatch> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateScalperConfig>>,
+  TError,
+  { data: BodyType<ScalperConfigPatch> },
+  TContext
+> => {
+  return useMutation(getUpdateScalperConfigMutationOptions(options));
+};
+
+/**
+ * @summary Get scalper bot runtime status
+ */
+export const getGetScalperStatusUrl = () => {
+  return `/api/scalper/status`;
+};
+
+export const getScalperStatus = async (
+  options?: RequestInit,
+): Promise<ScalperStatus> => {
+  return customFetch<ScalperStatus>(getGetScalperStatusUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetScalperStatusQueryKey = () => {
+  return [`/api/scalper/status`] as const;
+};
+
+export const getGetScalperStatusQueryOptions = <
+  TData = Awaited<ReturnType<typeof getScalperStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getScalperStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetScalperStatusQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getScalperStatus>>
+  > = ({ signal }) => getScalperStatus({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getScalperStatus>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetScalperStatusQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getScalperStatus>>
+>;
+export type GetScalperStatusQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get scalper bot runtime status
+ */
+
+export function useGetScalperStatus<
+  TData = Awaited<ReturnType<typeof getScalperStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getScalperStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetScalperStatusQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary List scalper trades
+ */
+export const getListScalperTradesUrl = (params?: ListScalperTradesParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/scalper/trades?${stringifiedParams}`
+    : `/api/scalper/trades`;
+};
+
+export const listScalperTrades = async (
+  params?: ListScalperTradesParams,
+  options?: RequestInit,
+): Promise<ScalperTrade[]> => {
+  return customFetch<ScalperTrade[]>(getListScalperTradesUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListScalperTradesQueryKey = (
+  params?: ListScalperTradesParams,
+) => {
+  return [`/api/scalper/trades`, ...(params ? [params] : [])] as const;
+};
+
+export const getListScalperTradesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listScalperTrades>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListScalperTradesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listScalperTrades>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListScalperTradesQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listScalperTrades>>
+  > = ({ signal }) => listScalperTrades(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listScalperTrades>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListScalperTradesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listScalperTrades>>
+>;
+export type ListScalperTradesQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List scalper trades
+ */
+
+export function useListScalperTrades<
+  TData = Awaited<ReturnType<typeof listScalperTrades>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListScalperTradesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listScalperTrades>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListScalperTradesQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Cancel an open scalper trade
+ */
+export const getCancelScalperTradeUrl = (id: number) => {
+  return `/api/scalper/trades/${id}/cancel`;
+};
+
+export const cancelScalperTrade = async (
+  id: number,
+  options?: RequestInit,
+): Promise<CancelScalperTrade200> => {
+  return customFetch<CancelScalperTrade200>(getCancelScalperTradeUrl(id), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getCancelScalperTradeMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof cancelScalperTrade>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof cancelScalperTrade>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["cancelScalperTrade"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof cancelScalperTrade>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return cancelScalperTrade(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CancelScalperTradeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof cancelScalperTrade>>
+>;
+
+export type CancelScalperTradeMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Cancel an open scalper trade
+ */
+export const useCancelScalperTrade = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof cancelScalperTrade>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof cancelScalperTrade>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getCancelScalperTradeMutationOptions(options));
+};
+
+/**
+ * @summary Get scalper bot performance statistics
+ */
+export const getGetScalperPerformanceUrl = () => {
+  return `/api/scalper/performance`;
+};
+
+export const getScalperPerformance = async (
+  options?: RequestInit,
+): Promise<ScalperPerformance> => {
+  return customFetch<ScalperPerformance>(getGetScalperPerformanceUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetScalperPerformanceQueryKey = () => {
+  return [`/api/scalper/performance`] as const;
+};
+
+export const getGetScalperPerformanceQueryOptions = <
+  TData = Awaited<ReturnType<typeof getScalperPerformance>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getScalperPerformance>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetScalperPerformanceQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getScalperPerformance>>
+  > = ({ signal }) => getScalperPerformance({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getScalperPerformance>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetScalperPerformanceQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getScalperPerformance>>
+>;
+export type GetScalperPerformanceQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get scalper bot performance statistics
+ */
+
+export function useGetScalperPerformance<
+  TData = Awaited<ReturnType<typeof getScalperPerformance>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getScalperPerformance>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetScalperPerformanceQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get current market scan results for top 5 USDT symbols
+ */
+export const getGetScalperScanUrl = () => {
+  return `/api/scalper/scan`;
+};
+
+export const getScalperScan = async (
+  options?: RequestInit,
+): Promise<ScalperScanResult> => {
+  return customFetch<ScalperScanResult>(getGetScalperScanUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetScalperScanQueryKey = () => {
+  return [`/api/scalper/scan`] as const;
+};
+
+export const getGetScalperScanQueryOptions = <
+  TData = Awaited<ReturnType<typeof getScalperScan>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getScalperScan>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetScalperScanQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getScalperScan>>> = ({
+    signal,
+  }) => getScalperScan({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getScalperScan>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetScalperScanQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getScalperScan>>
+>;
+export type GetScalperScanQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get current market scan results for top 5 USDT symbols
+ */
+
+export function useGetScalperScan<
+  TData = Awaited<ReturnType<typeof getScalperScan>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getScalperScan>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetScalperScanQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Manually trigger a scalper scan cycle
+ */
+export const getTriggerScalperScanUrl = () => {
+  return `/api/scalper/scan/trigger`;
+};
+
+export const triggerScalperScan = async (
+  options?: RequestInit,
+): Promise<TriggerScalperScan200> => {
+  return customFetch<TriggerScalperScan200>(getTriggerScalperScanUrl(), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getTriggerScalperScanMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof triggerScalperScan>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof triggerScalperScan>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["triggerScalperScan"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof triggerScalperScan>>,
+    void
+  > = () => {
+    return triggerScalperScan(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type TriggerScalperScanMutationResult = NonNullable<
+  Awaited<ReturnType<typeof triggerScalperScan>>
+>;
+
+export type TriggerScalperScanMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Manually trigger a scalper scan cycle
+ */
+export const useTriggerScalperScan = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof triggerScalperScan>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof triggerScalperScan>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(getTriggerScalperScanMutationOptions(options));
+};
 
 /**
  * @summary Signal performance breakdown by grade, mode, tf, symbol, direction

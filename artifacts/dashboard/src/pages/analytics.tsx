@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { getBotAnalytics } from "@workspace/api-client-react";
+import { getBotAnalytics, type AnalyticsDimEntry } from "@workspace/api-client-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine,
 } from "recharts";
@@ -15,17 +15,7 @@ function usd(v: number | null | undefined) {
   return `${sign}${v.toFixed(3)}`;
 }
 
-type DimEntry = {
-  label: string;
-  count: number;
-  wins: number;
-  losses: number;
-  winRate: number | null;
-  totalPnl: number;
-  avgPnl: number | null;
-  bestPnl: number | null;
-  worstPnl: number | null;
-};
+type DimEntry = AnalyticsDimEntry;
 
 function DimTable({ title, data, icon: Icon }: { title: string; data: DimEntry[]; icon: React.ComponentType<{ className?: string }> }) {
   if (!data.length) return (

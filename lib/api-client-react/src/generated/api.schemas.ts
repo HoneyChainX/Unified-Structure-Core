@@ -396,6 +396,111 @@ export interface BacktestResult {
   scenarios: BacktestResultScenarios;
 }
 
+export interface ScalperConfig {
+  id: number;
+  enabled: boolean;
+  paperMode: boolean;
+  positionSizeUsdt: number;
+  targetProfitUsdt: number;
+  slPct: number;
+  maxOpenTrades: number;
+  cooldownMinutes: number;
+  bbPeriod: number;
+  bbStdDev: number;
+  rsiPeriod: number;
+  rsiOversold: number;
+  rsiOverbought: number;
+  volumeSpikeMultiplier: number;
+  compoundingEnabled: boolean;
+  compoundBalance?: number | null;
+  longOnly: boolean;
+  updatedAt: string;
+}
+
+export interface ScalperConfigPatch {
+  enabled?: boolean;
+  paperMode?: boolean;
+  positionSizeUsdt?: number;
+  targetProfitUsdt?: number;
+  slPct?: number;
+  maxOpenTrades?: number;
+  cooldownMinutes?: number;
+  bbPeriod?: number;
+  bbStdDev?: number;
+  rsiPeriod?: number;
+  rsiOversold?: number;
+  rsiOverbought?: number;
+  volumeSpikeMultiplier?: number;
+  compoundingEnabled?: boolean;
+  compoundBalance?: number | null;
+  longOnly?: boolean;
+}
+
+export interface ScalperStatus {
+  enabled: boolean;
+  paperMode: boolean;
+  usdtBalance: number | null;
+  openTrades: number;
+  totalTrades: number;
+  apiConfigured: boolean;
+  lastSyncAt?: string | null;
+  lastScanAt?: string | null;
+  lastSignalCount: number;
+}
+
+export interface ScalperTrade {
+  id: number;
+  symbol: string;
+  gateSymbol: string;
+  side: string;
+  status: string;
+  positionSizeUsdt?: number | null;
+  quantity?: number | null;
+  entryPrice?: number | null;
+  livePrice?: number | null;
+  tpPrice?: number | null;
+  slPrice?: number | null;
+  closePrice?: number | null;
+  closeReason?: string | null;
+  pnl?: number | null;
+  paperMode: boolean;
+  bbUpper?: number | null;
+  bbLower?: number | null;
+  bbMid?: number | null;
+  rsi?: number | null;
+  volumeRatio?: number | null;
+  createdAt: string;
+  closedAt?: string | null;
+}
+
+export interface ScalperPerformance {
+  totalClosed: number;
+  wins: number;
+  losses: number;
+  winRate?: number | null;
+  totalPnl: number;
+  avgPnl?: number | null;
+  bestPnl?: number | null;
+  worstPnl?: number | null;
+}
+
+export interface ScalperScanRow {
+  gateSymbol: string;
+  lastClose?: number;
+  bbUpper?: number;
+  bbLower?: number;
+  bbMid?: number;
+  rsi?: number;
+  volumeRatio?: number;
+  nearLower?: boolean;
+  nearUpper?: boolean;
+}
+
+export interface ScalperScanResult {
+  symbols: ScalperScanRow[];
+  scannedAt: string;
+}
+
 export type ListSignalsParams = {
   limit?: number;
   offset?: number;
@@ -411,6 +516,21 @@ export const ListSignalsDir = {
   LONG: "LONG",
   SHORT: "SHORT",
 } as const;
+
+export type ListScalperTradesParams = {
+  limit?: number;
+  offset?: number;
+  status?: string;
+};
+
+export type CancelScalperTrade200 = {
+  ok: boolean;
+};
+
+export type TriggerScalperScan200 = {
+  ok: boolean;
+  message: string;
+};
 
 export type ListTradesParams = {
   limit?: number;

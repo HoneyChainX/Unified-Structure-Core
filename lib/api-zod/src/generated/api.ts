@@ -268,6 +268,178 @@ export const GetBotStatusResponse = zod.object({
 });
 
 /**
+ * @summary Get scalper bot configuration
+ */
+export const GetScalperConfigResponse = zod.object({
+  id: zod.number(),
+  enabled: zod.boolean(),
+  paperMode: zod.boolean(),
+  positionSizeUsdt: zod.number(),
+  targetProfitUsdt: zod.number(),
+  slPct: zod.number(),
+  maxOpenTrades: zod.number(),
+  cooldownMinutes: zod.number(),
+  bbPeriod: zod.number(),
+  bbStdDev: zod.number(),
+  rsiPeriod: zod.number(),
+  rsiOversold: zod.number(),
+  rsiOverbought: zod.number(),
+  volumeSpikeMultiplier: zod.number(),
+  compoundingEnabled: zod.boolean(),
+  compoundBalance: zod.number().nullish(),
+  longOnly: zod.boolean(),
+  updatedAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Update scalper bot configuration
+ */
+export const UpdateScalperConfigBody = zod.object({
+  enabled: zod.boolean().optional(),
+  paperMode: zod.boolean().optional(),
+  positionSizeUsdt: zod.number().optional(),
+  targetProfitUsdt: zod.number().optional(),
+  slPct: zod.number().optional(),
+  maxOpenTrades: zod.number().optional(),
+  cooldownMinutes: zod.number().optional(),
+  bbPeriod: zod.number().optional(),
+  bbStdDev: zod.number().optional(),
+  rsiPeriod: zod.number().optional(),
+  rsiOversold: zod.number().optional(),
+  rsiOverbought: zod.number().optional(),
+  volumeSpikeMultiplier: zod.number().optional(),
+  compoundingEnabled: zod.boolean().optional(),
+  compoundBalance: zod.number().nullish(),
+  longOnly: zod.boolean().optional(),
+});
+
+export const UpdateScalperConfigResponse = zod.object({
+  id: zod.number(),
+  enabled: zod.boolean(),
+  paperMode: zod.boolean(),
+  positionSizeUsdt: zod.number(),
+  targetProfitUsdt: zod.number(),
+  slPct: zod.number(),
+  maxOpenTrades: zod.number(),
+  cooldownMinutes: zod.number(),
+  bbPeriod: zod.number(),
+  bbStdDev: zod.number(),
+  rsiPeriod: zod.number(),
+  rsiOversold: zod.number(),
+  rsiOverbought: zod.number(),
+  volumeSpikeMultiplier: zod.number(),
+  compoundingEnabled: zod.boolean(),
+  compoundBalance: zod.number().nullish(),
+  longOnly: zod.boolean(),
+  updatedAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Get scalper bot runtime status
+ */
+export const GetScalperStatusResponse = zod.object({
+  enabled: zod.boolean(),
+  paperMode: zod.boolean(),
+  usdtBalance: zod.number().nullable(),
+  openTrades: zod.number(),
+  totalTrades: zod.number(),
+  apiConfigured: zod.boolean(),
+  lastSyncAt: zod.coerce.date().nullish(),
+  lastScanAt: zod.coerce.date().nullish(),
+  lastSignalCount: zod.number(),
+});
+
+/**
+ * @summary List scalper trades
+ */
+export const ListScalperTradesQueryParams = zod.object({
+  limit: zod.coerce.number().optional(),
+  offset: zod.coerce.number().optional(),
+  status: zod.coerce.string().optional(),
+});
+
+export const ListScalperTradesResponseItem = zod.object({
+  id: zod.number(),
+  symbol: zod.string(),
+  gateSymbol: zod.string(),
+  side: zod.string(),
+  status: zod.string(),
+  positionSizeUsdt: zod.number().nullish(),
+  quantity: zod.number().nullish(),
+  entryPrice: zod.number().nullish(),
+  livePrice: zod.number().nullish(),
+  tpPrice: zod.number().nullish(),
+  slPrice: zod.number().nullish(),
+  closePrice: zod.number().nullish(),
+  closeReason: zod.string().nullish(),
+  pnl: zod.number().nullish(),
+  paperMode: zod.boolean(),
+  bbUpper: zod.number().nullish(),
+  bbLower: zod.number().nullish(),
+  bbMid: zod.number().nullish(),
+  rsi: zod.number().nullish(),
+  volumeRatio: zod.number().nullish(),
+  createdAt: zod.coerce.date(),
+  closedAt: zod.coerce.date().nullish(),
+});
+export const ListScalperTradesResponse = zod.array(
+  ListScalperTradesResponseItem,
+);
+
+/**
+ * @summary Cancel an open scalper trade
+ */
+export const CancelScalperTradeParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const CancelScalperTradeResponse = zod.object({
+  ok: zod.boolean(),
+});
+
+/**
+ * @summary Get scalper bot performance statistics
+ */
+export const GetScalperPerformanceResponse = zod.object({
+  totalClosed: zod.number(),
+  wins: zod.number(),
+  losses: zod.number(),
+  winRate: zod.number().nullish(),
+  totalPnl: zod.number(),
+  avgPnl: zod.number().nullish(),
+  bestPnl: zod.number().nullish(),
+  worstPnl: zod.number().nullish(),
+});
+
+/**
+ * @summary Get current market scan results for top 5 USDT symbols
+ */
+export const GetScalperScanResponse = zod.object({
+  symbols: zod.array(
+    zod.object({
+      gateSymbol: zod.string(),
+      lastClose: zod.number().optional(),
+      bbUpper: zod.number().optional(),
+      bbLower: zod.number().optional(),
+      bbMid: zod.number().optional(),
+      rsi: zod.number().optional(),
+      volumeRatio: zod.number().optional(),
+      nearLower: zod.boolean().optional(),
+      nearUpper: zod.boolean().optional(),
+    }),
+  ),
+  scannedAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Manually trigger a scalper scan cycle
+ */
+export const TriggerScalperScanResponse = zod.object({
+  ok: zod.boolean(),
+  message: zod.string(),
+});
+
+/**
  * @summary Signal performance breakdown by grade, mode, tf, symbol, direction
  */
 export const GetBotAnalyticsResponse = zod.object({

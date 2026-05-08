@@ -1,0 +1,195 @@
+import { Router } from "express";
+import { db, scalperConfigTable, scalperTradesTable } from "@workspace/db";
+import { eq, desc, count, inArray } from "drizzle-orm";
+import { getUsdtBalance, getLivePrice, cancelPriceTriggeredOrder } from "../services/gateio";
+import { scalperLastSyncAt } from "../services/scalper-sync";
+import { scalperLoopLastRunAt, scalperLoopLastSignalCount, runScalperScan } from "../services/scalper-loop";
+import { getTopUsdtSymbols, fetchCandles, computeBB, computeRSI, computeVolumeRatio } from "../services/scalper-signals";
+
+const router = Router();
+
+// ── Config ────────────────────────────────────────────────────────────────────
+
+router.get("/config", async (req, res): Promise<void> => {
+  let [config] = await db.select().from(scalperConfigTable).limit(1);
+  if (!config) {
+    [config] = await db.insert(scalperConfigTable).values({ id: 1 }).returning();
+  }
+  res.json(config);
+});
+
+router.put("/config", async (req, res): Promise<void> => {
+  const body = req.body as Record<string, unknown>;
+  const allowed = [
+    "enabled", "paperMode", "longOnly",
+    "positionSizeUsdt", "targetProfitUsdt", "slPct",
+    "maxOpenTrades", "cooldownMinutes",
+    "bbPeriod", "bbStdDev",
+    "rsiPeriod", "rsiOversold", "rsiOverbought",
+    "volumeSpikeMultiplier",
+    "compoundingEnabled", "compoundBalance",
+  ];
+  const update: Record<string, unknown> = { updatedAt: new Date() };
+  for (const key of allowed) {
+    if (key in body && body[key] !== undefined) update[key] = body[key];
+  }
+
+  if (body["compoundingEnabled"] === true) {
+    const [existing] = await db.select().from(scalperConfigTable).limit(1);
+    if (existing && existing.compoundBalance == null) {
+      update["compoundBalance"] = existing.positionSizeUsdt;
+    }
+  }
+
+  const [existing] = await db.select().from(scalperConfigTable).limit(1);
+  let config;
+  if (!existing) {
+    [config] = await db.insert(scalperConfigTable).values({ id: 1, ...update }).returning();
+  } else {
+    [config] = await db.update(scalperConfigTable).set(update).where(eq(scalperConfigTable.id, existing.id)).returning();
+  }
+  req.log.info({ enabled: config.enabled, paperMode: config.paperMode }, "Scalper config updated");
+  res.json(config);
+});
+
+// ── Status ────────────────────────────────────────────────────────────────────
+
+router.get("/status", async (req, res): Promise<void> => {
+  const [config] = await db.select().from(scalperConfigTable).limit(1);
+  const apiConfigured = !!(process.env.GATEIO_API_KEY && process.env.GATEIO_API_SECRET);
+
+  const [openRow] = await db.select({ c: count() }).from(scalperTradesTable).where(inArray(scalperTradesTable.status, ["open", "paper"]));
+  const [totalRow] = await db.select({ c: count() }).from(scalperTradesTable);
+
+  let usdtBalance: number | null = null;
+  if (apiConfigured) {
+    try { usdtBalance = await getUsdtBalance(); } catch { /* ignore */ }
+  }
+
+  res.json({
+    enabled: config?.enabled ?? false,
+    paperMode: config?.paperMode ?? true,
+    usdtBalance,
+    openTrades: Number(openRow?.c ?? 0),
+    totalTrades: Number(totalRow?.c ?? 0),
+    apiConfigured,
+    lastSyncAt: scalperLastSyncAt,
+    lastScanAt: scalperLoopLastRunAt,
+    lastSignalCount: scalperLoopLastSignalCount,
+  });
+});
+
+// ── Trades ────────────────────────────────────────────────────────────────────
+
+router.get("/trades", async (req, res): Promise<void> => {
+  const limit = Math.min(parseInt((req.query["limit"] as string) || "50"), 200);
+  const offset = parseInt((req.query["offset"] as string) || "0");
+  const status = (req.query["status"] as string) || undefined;
+
+  let query = db.select().from(scalperTradesTable).$dynamic();
+  if (status) {
+    query = query.where(eq(scalperTradesTable.status, status)) as typeof query;
+  }
+
+  const trades = await query.orderBy(desc(scalperTradesTable.createdAt)).limit(limit).offset(offset);
+  res.json(trades);
+});
+
+router.delete("/trades/:id/cancel", async (req, res): Promise<void> => {
+  const tradeId = parseInt(req.params["id"]);
+  const [trade] = await db.select().from(scalperTradesTable).where(eq(scalperTradesTable.id, tradeId));
+  if (!trade) { res.status(404).json({ error: "Trade not found" }); return; }
+
+  if (!["open", "paper"].includes(trade.status)) {
+    res.status(400).json({ error: "Trade is not open" });
+    return;
+  }
+
+  if (!trade.paperMode) {
+    const cancelIds = [trade.tpOrderId, trade.slOrderId].filter(Boolean) as string[];
+    for (const orderId of cancelIds) {
+      try { await cancelPriceTriggeredOrder(parseInt(orderId), trade.gateSymbol); } catch { /* ignore */ }
+    }
+  }
+
+  await db.update(scalperTradesTable).set({ status: "cancelled", closedAt: new Date() }).where(eq(scalperTradesTable.id, tradeId));
+  res.json({ ok: true });
+});
+
+// ── Performance ───────────────────────────────────────────────────────────────
+
+router.get("/performance", async (req, res): Promise<void> => {
+  const closed = await db.select().from(scalperTradesTable).where(eq(scalperTradesTable.status, "closed"));
+  const wins = closed.filter((t) => (t.pnl ?? 0) > 0);
+  const totalPnl = closed.reduce((s, t) => s + (t.pnl ?? 0), 0);
+  const pnls = closed.map((t) => t.pnl ?? 0);
+
+  res.json({
+    totalClosed: closed.length,
+    wins: wins.length,
+    losses: closed.length - wins.length,
+    winRate: closed.length > 0 ? (wins.length / closed.length) * 100 : null,
+    totalPnl: parseFloat(totalPnl.toFixed(4)),
+    avgPnl: closed.length > 0 ? parseFloat((totalPnl / closed.length).toFixed(4)) : null,
+    bestPnl: pnls.length > 0 ? parseFloat(Math.max(...pnls).toFixed(4)) : null,
+    worstPnl: pnls.length > 0 ? parseFloat(Math.min(...pnls).toFixed(4)) : null,
+  });
+});
+
+// ── Market scan (read-only preview) ──────────────────────────────────────────
+
+router.get("/scan", async (req, res): Promise<void> => {
+  const [config] = await db.select().from(scalperConfigTable).limit(1);
+
+  let symbols: string[];
+  try {
+    symbols = await getTopUsdtSymbols(5);
+  } catch (err) {
+    res.status(502).json({ error: "Failed to fetch top symbols from Gate.io" });
+    return;
+  }
+
+  const results = await Promise.allSettled(
+    symbols.map(async (gateSymbol) => {
+      const candles = await fetchCandles(gateSymbol, "5m", 60);
+      const closes = candles.map((c) => c.close);
+      const volumes = candles.map((c) => c.volume);
+      const bbPeriod = config?.bbPeriod ?? 20;
+      const bbStdDev = config?.bbStdDev ?? 2.0;
+      const rsiPeriod = config?.rsiPeriod ?? 14;
+
+      const bb = computeBB(closes, bbPeriod, bbStdDev);
+      const rsi = computeRSI(closes, rsiPeriod);
+      const volumeRatio = computeVolumeRatio(volumes);
+      const lastClose = closes[closes.length - 1];
+
+      return {
+        gateSymbol,
+        lastClose,
+        bbUpper: parseFloat(bb.upper.toFixed(8)),
+        bbLower: parseFloat(bb.lower.toFixed(8)),
+        bbMid: parseFloat(bb.mid.toFixed(8)),
+        rsi: parseFloat(rsi.toFixed(2)),
+        volumeRatio: parseFloat(volumeRatio.toFixed(3)),
+        nearLower: lastClose <= bb.lower * 1.001,
+        nearUpper: lastClose >= bb.upper * 0.999,
+      };
+    })
+  );
+
+  const rows = results.map((r, i) => {
+    if (r.status === "fulfilled") return r.value;
+    return { gateSymbol: symbols[i], error: String((r as PromiseRejectedResult).reason) };
+  });
+
+  res.json({ symbols: rows, scannedAt: new Date() });
+});
+
+// ── Manual scan trigger ───────────────────────────────────────────────────────
+
+router.post("/scan/trigger", async (req, res): Promise<void> => {
+  runScalperScan().catch((err) => req.log.error({ err }, "Manual scalper scan failed"));
+  res.json({ ok: true, message: "Scan triggered" });
+});
+
+export default router;
