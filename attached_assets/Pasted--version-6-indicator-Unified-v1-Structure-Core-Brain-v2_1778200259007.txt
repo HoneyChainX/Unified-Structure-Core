@@ -1,0 +1,879 @@
+//@version=6
+indicator("Unified v1 – Structure + Core Brain v2.1 + Authority Bridge", overlay=false, max_bars_back=5000)
+
+//────────────────────────────────────────────────────────────────────────────
+// INPUTS
+//────────────────────────────────────────────────────────────────────────────
+int  intLen      = input.int(3,  "Internal pivot length", minval=2)
+int  extLen      = input.int(8,  "External pivot length", minval=5)
+int  obLookback  = input.int(50, "OB search lookback (bars)", minval=10)
+
+// Core Brain v2.1 settings
+int  L           = input.int(100, "Z-Score Length", minval=30)
+int  corrL       = input.int(100, "Correlation Length", minval=30)
+bool useAutoFlip = input.bool(true, "Auto-Flip (based on correlation)")
+
+// Authority filter strictness
+bool  blockWhenHostile = input.bool(true,  "Block longs when Context=Hostile (and block shorts when Context=Supportive)")
+float ctxStrong        = input.float(0.7, "Context threshold (Support/Hostile)", step=0.05)
+float riskStrong       = input.float(0.5, "Risk threshold (Risk-On/Off)", step=0.05)
+
+// Plot selection
+string plotMode   = input.string("AUTO", "Plot Mode", options=["AUTO","PRESSURE","FAVOR","NONE"])
+
+// Divergence inputs
+int  divLen        = input.int(5,  "Divergence pivot length", minval=3)
+bool useDivergence = input.bool(true, "Use Divergence in Confidence")
+int  divSyncBars   = input.int(12, "Div Sync Window (bars)", minval=1)
+bool useHiddenDiv  = input.bool(true, "Use Hidden Divergence")
+
+// Zone Margin (compat: absolute by default)
+// NOTE: Defaults preserve original behavior.
+float zoneMargin      = input.float(0.0, "Zone Margin (ABS default)", step=0.1)
+bool  zoneMarginIsPct = input.bool(false, "Zone Margin: Treat as % of zone range")
+bool  zoneMarginUseATR = input.bool(false, "Zone Margin: Use ATR (override)")
+int   zoneAtrLen      = input.int(14, "Zone Margin ATR Len", minval=1)
+float zoneAtrMult     = input.float(1.0, "Zone Margin ATR Mult", step=0.1)
+
+//────────────────────────────────────────────────────────────────────────────
+// PHASE 3 — Confidence Weighting + Risk Engine v1
+//────────────────────────────────────────────────────────────────────────────
+bool  useWeightedConfidence = input.bool(true, "Use Weighted Confidence (Phase 3)")
+float w_bias  = input.float(1.2, "W: Bias", step=0.1)
+float w_ctx   = input.float(1.0, "W: Context", step=0.1)
+float w_zone  = input.float(1.4, "W: Zone", step=0.1)
+float w_ema   = input.float(1.0, "W: EMA", step=0.1)
+float w_div   = input.float(0.8, "W: Divergence", step=0.1)
+float w_rot   = input.float(0.8, "W: Rotation", step=0.1)
+
+float confHiTh = input.float(75, "CONF_W High threshold", step=1)
+float confMdTh = input.float(55, "CONF_W Medium threshold", step=1)
+
+//────────────────────────────────────────────────────────────────────────────
+// TF DERIVATION FIX v2 (TradingView-safe: avoids invalid minute TFs like 2880)
+//────────────────────────────────────────────────────────────────────────────
+f_mul_tf(_k) =>
+    int mult = timeframe.multiplier
+
+    if timeframe.isseconds
+        int s = mult * _k
+        s % 86400 == 0 ? str.tostring(s / 86400) + "D" :
+         s % 3600  == 0 ? str.tostring(s / 3600)  + "H" :
+         s % 60    == 0 ? str.tostring(s / 60)          :
+                          str.tostring(s) + "S"
+
+    else if timeframe.isminutes
+        int m = mult * _k
+        m % 10080 == 0 ? str.tostring(m / 10080) + "W" :
+         m % 1440  == 0 ? str.tostring(m / 1440)  + "D" :
+                          str.tostring(m)
+
+    else if timeframe.isdaily
+        str.tostring(mult * _k) + "D"
+    else if timeframe.isweekly
+        str.tostring(mult * _k) + "W"
+    else if timeframe.ismonthly
+        str.tostring(mult * _k) + "M"
+    else
+        str.tostring(mult * _k)
+
+string TF2 = f_mul_tf(3)
+string TF3 = f_mul_tf(12)
+
+//────────────────────────────────────────────────────────────────────────────
+// MODE ENGINE (Policy only) + TIMEFRAME GUARD
+//────────────────────────────────────────────────────────────────────────────
+string mode = input.string("Intraday", "Mode", options=["Scalp","Intraday","Swing","Position","High Risk","Low Risk"])
+
+// Optional: keep a manual macro tf input for debugging/override if needed
+bool   useModeMacroTF = input.bool(true, "Use Mode Macro TF (override input)")
+string MACRO_TF_INP   = input.timeframe("240", "Macro TF Input (GOLD/DXY)")
+
+f_tfMinutes() =>
+    int out = timeframe.multiplier
+    if timeframe.isseconds
+        out := math.max(1, int(timeframe.multiplier / 60))
+    else if timeframe.isminutes
+        out := timeframe.multiplier
+    else if timeframe.isdaily
+        out := timeframe.multiplier * 1440
+    else if timeframe.isweekly
+        out := timeframe.multiplier * 10080
+    else if timeframe.ismonthly
+        out := timeframe.multiplier * 43200 // 30d * 1440
+    else
+        out := timeframe.multiplier
+    out
+
+// Policy outputs
+var int    MIN_TF_MIN   = 5
+var int    MAX_TF_MIN   = 0      // 0 = no max
+var bool   GUARD_HARD   = false
+var string MACRO_TF_P   = "240"
+
+// Set policy by mode (YOUR RULES + Macro recommendation)
+if mode == "Scalp"
+    MIN_TF_MIN := 1
+    MAX_TF_MIN := 240
+    GUARD_HARD := true
+    MACRO_TF_P := "60"          // 1H
+else if mode == "Intraday"
+    MIN_TF_MIN := 15
+    MAX_TF_MIN := 240
+    GUARD_HARD := false
+    MACRO_TF_P := "240"         // 4H
+else if mode == "Swing"
+    MIN_TF_MIN := 60
+    MAX_TF_MIN := 10080
+    GUARD_HARD := false
+    MACRO_TF_P := "D"           // 1D
+else if mode == "Position"
+    MIN_TF_MIN := 240
+    MAX_TF_MIN := 20160
+    GUARD_HARD := false
+    MACRO_TF_P := "W"           // 1W
+else if mode == "High Risk"
+    MIN_TF_MIN := 1
+    MAX_TF_MIN := 60
+    GUARD_HARD := true
+    MACRO_TF_P := "15"          // 15m
+else // Low Risk
+    MIN_TF_MIN := 240
+    MAX_TF_MIN := 0
+    GUARD_HARD := false
+    MACRO_TF_P := "W"           // 1W
+
+
+// Effective Macro TF (Mode overrides input when enabled)
+string MACRO_TF = useModeMacroTF ? MACRO_TF_P : MACRO_TF_INP
+
+// Guard evaluation
+int  TF1_MIN    = f_tfMinutes()
+bool TF_MIN_OK  = TF1_MIN >= MIN_TF_MIN
+bool TF_MAX_OK  = (MAX_TF_MIN == 0) ? true : (TF1_MIN <= MAX_TF_MIN)
+bool TF_OK      = TF_MIN_OK and TF_MAX_OK
+
+string TF_CLASS =
+     TF1_MIN < MIN_TF_MIN ? "LOW" :
+     (MAX_TF_MIN != 0 and TF1_MIN > MAX_TF_MIN) ? "HIGH" :
+     "NORMAL"
+
+bool GUARD_BLOCK = not TF_OK
+bool RUN_HEAVY   = not (GUARD_HARD and GUARD_BLOCK)
+
+//────────────────────────────────────────────────────────────────────────────
+// 1) STRUCTURE ENGINE (INT + EXT MSS) – NO REPAINT
+//────────────────────────────────────────────────────────────────────────────
+f_pivots(_len) =>
+    float ph = ta.pivothigh(high, _len, _len)
+    float pl = ta.pivotlow(low,  _len, _len)
+    [ph, pl]
+
+f_mss(_len) =>
+    [ph, pl] = f_pivots(_len)
+
+    var float lastHigh = na
+    var float lastLow  = na
+    var int   dir      = 0
+    var float mssPrice = na
+    var int   mssBar   = na
+
+    if not na(ph)
+        lastHigh := ph
+    if not na(pl)
+        lastLow := pl
+
+    bool bullBreak = not na(lastHigh) and close > lastHigh
+    bool bearBreak = not na(lastLow)  and close < lastLow
+
+    if bullBreak
+        dir := 1
+        mssPrice := lastHigh
+        mssBar := bar_index
+    else if bearBreak
+        dir := -1
+        mssPrice := lastLow
+        mssBar := bar_index
+
+    [dir, mssPrice, mssBar]
+
+f_find_ob(_dir, _lookback) =>
+    float obLow  = na
+    float obHigh = na
+    int   obBar  = na
+
+    if _dir == 1
+        for i = 1 to _lookback
+            if close[i] < open[i]
+                obLow  := math.min(open[i], close[i])
+                obHigh := math.max(open[i], close[i])
+                obBar  := bar_index - i
+                break
+    else if _dir == -1
+        for i = 1 to _lookback
+            if close[i] > open[i]
+                obLow  := math.min(open[i], close[i])
+                obHigh := math.max(open[i], close[i])
+                obBar  := bar_index - i
+                break
+
+    [obLow, obHigh, obBar]
+
+// TF1 MSS
+[intDir1, intPrice1, intBar1] = f_mss(intLen)
+[extDir1, extPrice1, extBar1] = f_mss(extLen)
+
+// Persisted external authority state (no repaint)
+var int   PA_DIR      = 0
+var float PA_MSS      = na
+var int   PA_MSS_BAR  = na
+var float PA_OB_LOW   = na
+var float PA_OB_HIGH  = na
+var int   PA_OB_BAR   = na
+
+if not na(extBar1)
+    PA_DIR     := extDir1
+    PA_MSS     := extPrice1
+    PA_MSS_BAR := extBar1
+    [lo, hi, b] = f_find_ob(extDir1, obLookback)
+    PA_OB_LOW  := lo
+    PA_OB_HIGH := hi
+    PA_OB_BAR  := b
+
+// TF2/TF3 directions (bias/confirmation) — HEAVY (no ternary tuples)
+int   extDir2 = 0
+float extMss2 = na
+int   extBar2 = na
+
+int   extDir3 = 0
+float extMss3 = na
+int   extBar3 = na
+
+if RUN_HEAVY
+    [d2, m2, b2] = request.security(syminfo.tickerid, TF2, f_mss(extLen), lookahead=barmerge.lookahead_off)
+    extDir2 := d2
+    extMss2 := m2
+    extBar2 := b2
+
+    [d3, m3, b3] = request.security(syminfo.tickerid, TF3, f_mss(extLen), lookahead=barmerge.lookahead_off)
+    extDir3 := d3
+    extMss3 := m3
+    extBar3 := b3
+
+//────────────────────────────────────────────────────────────────────────────
+// 2) CORE BRAIN v2.1 – Pressure + Favorability + Auto-Flip (Context only)
+//────────────────────────────────────────────────────────────────────────────
+string X      = syminfo.basecurrency
+float  priceX = close
+
+f_sec(_sym, _tf, _expr) =>
+    request.security(_sym, _tf, _expr, barmerge.gaps_off, barmerge.lookahead_off)
+
+// External data
+float usdtCap   = request.security("CRYPTOCAP:USDT",     timeframe.period, close)
+float usdcCap   = request.security("CRYPTOCAP:USDC",     timeframe.period, close)
+float stableCap = request.security("CRYPTOCAP:STABLE.C", timeframe.period, close)
+
+float btcUsd = request.security("INDEX:BTCUSD", timeframe.period, close)
+float ethUsd = request.security("INDEX:ETHUSD", timeframe.period, close)
+
+float btcDom  = request.security("CRYPTOCAP:BTC.D",  timeframe.period, close)
+float usdtDom = request.security("CRYPTOCAP:USDT.D", timeframe.period, close)
+float usdcDom = request.security("CRYPTOCAP:USDC.D", timeframe.period, close)
+
+float total3   = request.security("CRYPTOCAP:TOTAL3",   timeframe.period, close)
+float total3es = request.security("CRYPTOCAP:TOTAL3ES", timeframe.period, close)
+float ethCap   = request.security("CRYPTOCAP:ETH",      timeframe.period, close)
+float btcCap   = request.security("CRYPTOCAP:BTC",      timeframe.period, close)
+float ethDom   = request.security("CRYPTOCAP:ETH.D",    timeframe.period, close)
+
+// Macro-anchored series — HEAVY
+float gold = RUN_HEAVY ? f_sec("TVC:GOLD", MACRO_TF, close) : na
+float dxy  = RUN_HEAVY ? f_sec("TVC:DXY",  MACRO_TF, close) : na
+
+bool GOLD_OK = not na(gold)
+bool DXY_OK  = not na(dxy)
+
+// helpers
+f_div(a, b) =>
+    b != 0 ? a / b : na
+
+f_z(src, len) =>
+    float m = ta.sma(src, len)
+    float d = ta.stdev(src, len)
+    d != 0 ? (src - m) / d : 0.0
+
+f_z_safe(src, len) =>
+    float m = ta.sma(src, len)
+    float d = ta.stdev(src, len)
+    (na(src) or na(m) or na(d) or d == 0) ? 0.0 : (src - m) / d
+
+// Pair-Specific: Pressure (…/X)
+float P1 = f_div((usdtCap + usdcCap), priceX)
+float P2 = f_div((btcUsd + ethUsd),   priceX)
+float P3 = f_div(stableCap,           priceX)
+
+// Pair-Specific: Favorability (X/…)
+float F1 = f_div(priceX, (usdtCap + usdcCap))
+float F2 = f_div(priceX, (btcUsd + ethUsd))
+float F3 = f_div(priceX, stableCap)
+
+// Market Regime (fixed)
+float M1 = f_div((usdtCap + usdcCap), btcCap)
+float M2 = f_div(btcDom, (usdtDom + usdcDom))
+float M3 = f_div((btcCap + ethCap), total3)
+float M4 = f_div(ethUsd, btcUsd)
+float M5 = f_div(ethDom, btcDom)
+float M6 = GOLD_OK ? f_div(gold, btcUsd) : na
+float M7 = DXY_OK  ? f_div(btcUsd, dxy)  : na
+
+//────────────────────────────────────────────────────────────────────────────
+// PHASE 2 — Rotation Layer (Approved Spreads)
+// A) ALT vs BTC: TOTAL3ES / BTC
+// A2) ALT vs ETH: TOTAL3ES / ETH
+// B) ETH vs BTC: ETH / BTC
+// C) Stable Dominance: USDT.D + USDC.D
+//────────────────────────────────────────────────────────────────────────────
+bool  useRotationLayer     = input.bool(true,  "Use Rotation Layer")
+bool  useRotGate_Position  = input.bool(true,  "Rotation Gate: Position")
+bool  useRotGate_LowRisk   = input.bool(true,  "Rotation Gate: Low Risk")
+bool  useRotGate_Swing     = input.bool(false, "Rotation Gate: Swing (optional)")
+float rotWeight            = input.float(1.0,  "Rotation Weight", step=0.1)
+float rotOnTh              = input.float(0.35, "Rotation ON threshold (z)", step=0.05)
+float rotOffTh             = input.float(0.35, "Risk-Off threshold (stable z)", step=0.05)
+
+float R_alt_btc   = f_div(total3es, btcCap)            // TOTAL3ES/BTC
+float R_alt_eth   = f_div(total3es, ethCap)            // TOTAL3ES/ETH
+float R_eth_btc   = f_div(ethCap,  btcCap)             // ETH/BTC
+float R_stableDom = (usdtDom + usdcDom)                // USDT.D + USDC.D
+
+float zAltBTC = f_z_safe(R_alt_btc,   L)
+float zAltETH = f_z_safe(R_alt_eth,   L)
+float zEthBTC = f_z_safe(R_eth_btc,   L)
+float zStDom  = f_z_safe(R_stableDom, L)
+
+// Composite Rotation Score (risk-on positive, risk-off negative)
+float ROT_SCORE_RAW = (0.40 * zAltBTC + 0.35 * zAltETH + 0.25 * zEthBTC) - (0.70 * zStDom)
+float ROT_SCORE     = useRotationLayer ? (ROT_SCORE_RAW * rotWeight) : 0.0
+
+// Rotation State (robust, interpretable)
+string ROT_STATE =
+     not useRotationLayer ? "ROT_OFF" :
+     zStDom > rotOffTh    ? "RISK_OFF" :
+     (zEthBTC > rotOnTh and zAltBTC > rotOnTh and zAltETH > rotOnTh) ? "ETH->ALTS" :
+     (zEthBTC > rotOnTh and (zAltBTC <= rotOnTh or zAltETH <= rotOnTh)) ? "BTC->ETH" :
+     ((zAltBTC > rotOnTh or zAltETH > rotOnTh) and zEthBTC <= rotOnTh) ? "BTC->ALTS" :
+     "NEUTRAL"
+
+bool rotGateEnabled =
+     (mode == "Position" and useRotGate_Position) or
+     (mode == "Low Risk"  and useRotGate_LowRisk)  or
+     (mode == "Swing"     and useRotGate_Swing)
+
+// Longs: block only on RISK_OFF (unchanged intent)
+bool rotAllowsLong = (ROT_STATE != "RISK_OFF")
+
+// Shorts: NEW (Batch-1) — block shorts during risk-on rotation regimes
+// Rationale: avoid shorting while rotation favors ETH/ALTS flows.
+bool rotShortBlocked =
+     (ROT_STATE == "ETH->ALTS") or
+     (ROT_STATE == "BTC->ALTS") or
+     (ROT_STATE == "BTC->ETH")
+
+bool rotAllowsShort = not rotShortBlocked
+
+bool ROT_GATE_OK =
+     not rotGateEnabled ? true :
+     (PA_DIR == 1 ? rotAllowsLong : PA_DIR == -1 ? rotAllowsShort : true)
+
+// z-scores
+float zP1 = f_z(P1, L), zP2 = f_z(P2, L), zP3 = f_z(P3, L)
+float zF1 = f_z(F1, L), zF2 = f_z(F2, L), zF3 = f_z(F3, L)
+float zM1 = f_z(M1, L), zM2 = f_z(M2, L), zM3 = f_z(M3, L), zM4 = f_z(M4, L), zM5 = f_z(M5, L),
+      zM6 = f_z_safe(M6, L), zM7 = f_z_safe(M7, L)
+
+float pairPressure = (zP1 + zP2 + zP3) / 3.0
+float pairFavor    = (zF1 + zF2 + zF3) / 3.0
+float marketScore  = (zM1 + zM2 + zM3 + zM4 + zM5 + zM6 + zM7 + ROT_SCORE) / 8.0
+
+float pressureScore = pairPressure * 0.6 + marketScore * 0.4
+float favorScore    = pairFavor    * 0.6 + marketScore * 0.4
+
+// Auto-flip based on correlation of pressureScore with price returns
+float ret      = ta.roc(priceX, 1)
+float corr     = ta.correlation(pressureScore, ret, corrL)
+float autoScore = useAutoFlip ? (corr < 0 ? -pressureScore : pressureScore) : pressureScore
+
+string CTX =
+     autoScore > ctxStrong  ? "Supportive" :
+     autoScore < -ctxStrong ? "Hostile" :
+     "Neutral"
+
+string RISK =
+     marketScore > riskStrong  ? "Risk-On" :
+     marketScore < -riskStrong ? "Risk-Off" :
+     "Balanced"
+
+string FLIP = useAutoFlip ? (corr < 0 ? "Flipped" : "Not Flipped") : "AutoFlip Off"
+
+//────────────────────────────────────────────────────────────────────────────
+// 3) AUTHORITY BRIDGE v1
+//────────────────────────────────────────────────────────────────────────────
+bool biasAligned =
+     PA_DIR == 0 ? false :
+     (extDir3 == 0 ? true : (PA_DIR == extDir3))
+
+bool ctxAllowsLong  = (CTX != "Hostile")
+bool ctxAllowsShort = (CTX != "Supportive")
+
+bool CTX_OK =
+     not blockWhenHostile ? true :
+     (PA_DIR == 1 ? ctxAllowsLong : PA_DIR == -1 ? ctxAllowsShort : false)
+
+bool ENTRY_ALLOWED = (PA_DIR != 0) and biasAligned and CTX_OK
+
+string AUTH =
+     PA_DIR == 1  ? "LONG Authority" :
+     PA_DIR == -1 ? "SHORT Authority" :
+     "No Authority"
+
+//────────────────────────────────────────────────────────────────────────────
+// 4) SPRINT B – FIB MATH ENGINE
+//────────────────────────────────────────────────────────────────────────────
+// Batch-1: OB_MID guarded to avoid NA propagation
+float OB_MID = (not na(PA_OB_LOW) and not na(PA_OB_HIGH)) ? ((PA_OB_LOW + PA_OB_HIGH) * 0.5) : na
+
+bool  FIB_VALID = (PA_DIR != 0) and not na(PA_MSS) and not na(PA_OB_LOW) and not na(PA_OB_HIGH) and not na(OB_MID)
+
+float fib_075  = na
+float fib_0786 = na
+float TP1 = na
+float TP2 = na
+float TP3 = na
+float ENTRY_ZONE_LOW  = na
+float ENTRY_ZONE_HIGH = na
+
+if FIB_VALID
+    float delta = math.abs(PA_MSS - OB_MID)
+    fib_075  := PA_MSS + (OB_MID - PA_MSS) * 0.75
+    fib_0786 := PA_MSS + (OB_MID - PA_MSS) * 0.786
+
+    ENTRY_ZONE_LOW  := math.min(fib_075, fib_0786)
+    ENTRY_ZONE_HIGH := math.max(fib_075, fib_0786)
+
+    if PA_DIR == 1
+        TP1 := PA_MSS + delta * 1.0
+        TP2 := PA_MSS + delta * 1.272
+        TP3 := PA_MSS + delta * 1.618
+    else
+        TP1 := PA_MSS - delta * 1.0
+        TP2 := PA_MSS - delta * 1.272
+        TP3 := PA_MSS - delta * 1.618
+
+bool IN_ZONE  = FIB_VALID and not na(ENTRY_ZONE_LOW) and not na(ENTRY_ZONE_HIGH) and (priceX >= ENTRY_ZONE_LOW) and (priceX <= ENTRY_ZONE_HIGH)
+bool SETUP_OK = ENTRY_ALLOWED and IN_ZONE
+
+// Entry Reference (Batch-1): stable anchor for RR
+float ENTRY_REF = (not na(ENTRY_ZONE_LOW) and not na(ENTRY_ZONE_HIGH)) ? ((ENTRY_ZONE_LOW + ENTRY_ZONE_HIGH) * 0.5) : na
+
+//────────────────────────────────────────────────────────────────────────────
+// Risk Engine v1 — SL suggestion (structure-based)
+//────────────────────────────────────────────────────────────────────────────
+float SL = na
+
+if FIB_VALID
+    // Conservative SL = beyond OB boundary (body), slightly padded
+    float pad = math.abs(PA_OB_HIGH - PA_OB_LOW) * 0.15
+    if PA_DIR == 1
+        SL := PA_OB_LOW - pad
+    else if PA_DIR == -1
+        SL := PA_OB_HIGH + pad
+
+// RR to TP1 (Batch-1): compute from ENTRY_REF, not current price
+float RR1 = na
+if not na(SL) and not na(TP1) and not na(ENTRY_REF)
+    float risk = math.abs(ENTRY_REF - SL)
+    float rew  = math.abs(TP1 - ENTRY_REF)
+    RR1 := (risk > 0) ? (rew / risk) : na
+
+//────────────────────────────────────────────────────────────────────────────
+// 5) SPRINT C – EMA Alignment + Confidence + Divergence (AutoScore)
+//────────────────────────────────────────────────────────────────────────────
+float ema8  = ta.ema(priceX, 8)
+float ema21 = ta.ema(priceX, 21)
+
+bool emaTF1Long  = ema8 > ema21
+bool emaTF1Short = ema8 < ema21
+
+// EMA (TF3) — HEAVY
+float ema8_TF3  = RUN_HEAVY ? request.security(syminfo.tickerid, TF3, ta.ema(close, 8),  lookahead=barmerge.lookahead_off) : na
+float ema21_TF3 = RUN_HEAVY ? request.security(syminfo.tickerid, TF3, ta.ema(close, 21), lookahead=barmerge.lookahead_off) : na
+
+bool emaTF3Long  = (not na(ema8_TF3) and not na(ema21_TF3)) ? (ema8_TF3 > ema21_TF3) : false
+bool emaTF3Short = (not na(ema8_TF3) and not na(ema21_TF3)) ? (ema8_TF3 < ema21_TF3) : false
+
+//────────────────────────────────────────────────────────────────────────────
+// Divergence v2 on AutoScore (Regular + Hidden + Sync + Zone-filtered)
+//────────────────────────────────────────────────────────────────────────────
+float pHi = ta.pivothigh(priceX,    divLen, divLen)
+float pLo = ta.pivotlow (priceX,    divLen, divLen)
+float sHi = ta.pivothigh(autoScore, divLen, divLen)
+float sLo = ta.pivotlow (autoScore, divLen, divLen)
+
+var float pLo1 = na
+var float pLo2 = na
+var float sLo1 = na
+var float sLo2 = na
+var float pHi1 = na
+var float pHi2 = na
+var float sHi1 = na
+var float sHi2 = na
+
+var int pLoBar1 = na
+var int pLoBar2 = na
+var int sLoBar1 = na
+var int sLoBar2 = na
+var int pHiBar1 = na
+var int pHiBar2 = na
+var int sHiBar1 = na
+var int sHiBar2 = na
+
+_pivBar() =>
+    bar_index - divLen
+
+if not na(pLo)
+    pLo2 := pLo1
+    pLoBar2 := pLoBar1
+    pLo1 := pLo
+    pLoBar1 := _pivBar()
+
+if not na(sLo)
+    sLo2 := sLo1
+    sLoBar2 := sLoBar1
+    sLo1 := sLo
+    sLoBar1 := _pivBar()
+
+if not na(pHi)
+    pHi2 := pHi1
+    pHiBar2 := pHiBar1
+    pHi1 := pHi
+    pHiBar1 := _pivBar()
+
+if not na(sHi)
+    sHi2 := sHi1
+    sHiBar2 := sHiBar1
+    sHi1 := sHi
+    sHiBar1 := _pivBar()
+
+bool syncLow  = not na(pLoBar1) and not na(sLoBar1) and math.abs(pLoBar1 - sLoBar1) <= divSyncBars
+bool syncHigh = not na(pHiBar1) and not na(sHiBar1) and math.abs(pHiBar1 - sHiBar1) <= divSyncBars
+
+// Zone filter (strict or with margin)
+// Batch-1: Margin can be ABS (default), % of zone range, or ATR-based (override)
+float zoneRange = (not na(ENTRY_ZONE_LOW) and not na(ENTRY_ZONE_HIGH)) ? math.abs(ENTRY_ZONE_HIGH - ENTRY_ZONE_LOW) : na
+float marginAbs = zoneMargin
+
+if zoneMarginIsPct and not na(zoneRange)
+    marginAbs := zoneRange * (zoneMargin / 100.0)
+
+if zoneMarginUseATR
+    marginAbs := ta.atr(zoneAtrLen) * zoneAtrMult
+
+float zLo = ENTRY_ZONE_LOW  - marginAbs
+float zHi = ENTRY_ZONE_HIGH + marginAbs
+
+bool  zoneOK = not na(ENTRY_ZONE_LOW) and not na(ENTRY_ZONE_HIGH) and (priceX >= zLo) and (priceX <= zHi)
+
+// Regular divergences (synced)
+bool bullDiv_reg = syncLow  and not na(pLo1) and not na(pLo2) and not na(sLo1) and not na(sLo2) and (pLo1 < pLo2) and (sLo1 > sLo2)
+bool bearDiv_reg = syncHigh and not na(pHi1) and not na(pHi2) and not na(sHi1) and not na(sHi2) and (pHi1 > pHi2) and (sHi1 < sHi2)
+
+// Hidden divergences (synced) — trend continuation
+// Hidden Bull: price HL, score LL
+bool bullDiv_hid = syncLow  and not na(pLo1) and not na(pLo2) and not na(sLo1) and not na(sLo2) and (pLo1 > pLo2) and (sLo1 < sLo2)
+// Hidden Bear: price LH, score HH
+bool bearDiv_hid = syncHigh and not na(pHi1) and not na(pHi2) and not na(sHi1) and not na(sHi2) and (pHi1 < pHi2) and (sHi1 > sHi2)
+
+// Direction gating + zone gating
+bool bullOK = (PA_DIR == 1) and zoneOK
+bool bearOK = (PA_DIR == -1) and zoneOK
+
+bool bullDiv = bullOK and (bullDiv_reg or (useHiddenDiv and bullDiv_hid))
+bool bearDiv = bearOK and (bearDiv_reg or (useHiddenDiv and bearDiv_hid))
+
+bool divSupports =
+     not useDivergence ? true :
+     (PA_DIR == 1 ? bullDiv : PA_DIR == -1 ? bearDiv : false)
+
+// Confidence / Confluence
+int CONF_SCORE = 0
+CONF_SCORE += (PA_DIR != 0) ? 1 : 0
+CONF_SCORE += biasAligned ? 1 : 0
+
+bool ctxDirOK = (PA_DIR == 1 ? (CTX != "Hostile") : PA_DIR == -1 ? (CTX != "Supportive") : false)
+CONF_SCORE += ctxDirOK ? 1 : 0
+CONF_SCORE += IN_ZONE ? 1 : 0
+
+bool ema1OK = (PA_DIR == 1 ? emaTF1Long : PA_DIR == -1 ? emaTF1Short : false)
+CONF_SCORE += ema1OK ? 1 : 0
+
+bool ema3OK = (PA_DIR == 1 ? emaTF3Long : PA_DIR == -1 ? emaTF3Short : false)
+CONF_SCORE += ema3OK ? 1 : 0
+
+CONF_SCORE += (useDivergence and divSupports) ? 1 : 0
+
+string SETUP_GRADE_RAW =
+     CONF_SCORE >= 6 ? "A+ Setup" :
+     CONF_SCORE >= 4 ? "Strong Setup" :
+     CONF_SCORE >= 3 ? "Setup" :
+     "None"
+
+bool SIGNAL_OK = (SETUP_GRADE_RAW == "Strong Setup") or (SETUP_GRADE_RAW == "A+ Setup")
+
+// Weighted Confidence (0..100)
+float wb = (PA_DIR != 0 and biasAligned) ? 1.0 : 0.0
+float wc = ctxDirOK ? 1.0 : 0.0
+float wz = IN_ZONE ? 1.0 : 0.0
+float we = (ema1OK ? 0.5 : 0.0) + (ema3OK ? 0.5 : 0.0)          // EMA total 0..1
+float wd = (useDivergence and divSupports) ? 1.0 : 0.0
+
+// Rotation support (only meaningful when rotation layer enabled)
+bool rotSupport =
+     not useRotationLayer ? true :
+     (PA_DIR == 1 ? (ROT_STATE != "RISK_OFF") : true)
+
+float wr = rotSupport ? 1.0 : 0.0
+
+float W_SUM = (w_bias + w_ctx + w_zone + w_ema + w_div + w_rot)
+float W_HIT = (wb*w_bias) + (wc*w_ctx) + (wz*w_zone) + (we*w_ema) + (wd*w_div) + (wr*w_rot)
+
+// Batch-1: W_SUM guard (hardening only)
+float CONF_W = na
+if useWeightedConfidence
+    CONF_W := (W_SUM != 0) ? (100.0 * W_HIT / W_SUM) : 0.0
+else
+    CONF_W := (100.0 * CONF_SCORE / 7.0)
+
+string RISK_TIER =
+     CONF_W >= confHiTh ? "HIGH_CONF" :
+     CONF_W >= confMdTh ? "MID_CONF" :
+     "LOW_CONF"
+
+//────────────────────────────────────────────────────────────────────────────
+// Gates v2 (B > C > Z): sequential evaluation + explicit reason
+//────────────────────────────────────────────────────────────────────────────
+bool GATE_BIAS = biasAligned
+bool GATE_CTX  = GATE_BIAS and ctxDirOK
+bool GATE_ZONE = GATE_CTX and IN_ZONE
+
+bool TRIGGER_OK = SIGNAL_OK and ENTRY_ALLOWED and GATE_ZONE
+TRIGGER_OK := TRIGGER_OK and not GUARD_BLOCK
+TRIGGER_OK := TRIGGER_OK and ROT_GATE_OK
+
+string BLOCK_REASON =
+     not TF_OK          ? ("TF_GUARD:" + TF_CLASS) :
+     PA_DIR == 0        ? "NO_AUTHORITY" :
+     not ENTRY_ALLOWED  ? "ENTRY_NOT_ALLOWED" :
+     not biasAligned    ? "B_FAIL" :
+     not ctxDirOK       ? "C_FAIL" :
+     not IN_ZONE        ? "Z_FAIL" :
+     not SIGNAL_OK      ? "CONF_FAIL" :
+     not ROT_GATE_OK    ? "ROT_FAIL" :
+     "OK"
+
+string SETUP_GRADE =
+     TRIGGER_OK ? (SETUP_GRADE_RAW + " (TRIGGER)") :
+     (SETUP_GRADE_RAW != "None" ? (SETUP_GRADE_RAW + " (BLOCKED)") : "None")
+
+// Alerts (JSON-ready) — only when TRIGGER_OK
+if TRIGGER_OK and barstate.isconfirmed
+    alert(
+      '{"symbol":"' + syminfo.ticker +
+      '","tf":"' + timeframe.period +
+      '","mode":"' + mode +
+      '","macro_tf":"' + MACRO_TF +
+      '","dir":"' + (PA_DIR==1?"LONG":"SHORT") +
+      '","auth":"' + AUTH +
+      '","pa_mss":' + str.tostring(PA_MSS) +
+      ',"ob_low":' + str.tostring(PA_OB_LOW) +
+      ',"ob_high":' + str.tostring(PA_OB_HIGH) +
+      ',"zone_low":' + str.tostring(ENTRY_ZONE_LOW) +
+      ',"zone_high":' + str.tostring(ENTRY_ZONE_HIGH) +
+      ',"entry_ref":' + str.tostring(ENTRY_REF) +
+      ',"sl":' + str.tostring(SL) +
+      ',"rr1":' + str.tostring(RR1) +
+      ',"tp1":' + str.tostring(TP1) +
+      ',"tp2":' + str.tostring(TP2) +
+      ',"tp3":' + str.tostring(TP3) +
+      ',"conf":' + str.tostring(CONF_SCORE) +
+      ',"conf_w":' + str.tostring(CONF_W) +
+      ',"risk_tier":"' + RISK_TIER +
+      '","grade":"' + SETUP_GRADE_RAW +
+      '","rot":"' + ROT_STATE +
+      '","rot_score":' + str.tostring(ROT_SCORE) +
+      ',"block_reason":"' + BLOCK_REASON +
+      '","tf2":"' + TF2 +
+      '","tf3":"' + TF3 +
+      '"}',
+      alert.freq_once_per_bar_close
+    )
+
+//────────────────────────────────────────────────────────────────────────────
+// OUTPUT + DASHBOARD (FIXED)
+//────────────────────────────────────────────────────────────────────────────
+float plotSeries =
+     plotMode == "AUTO"     ? autoScore :
+     plotMode == "PRESSURE" ? pressureScore :
+     plotMode == "FAVOR"    ? favorScore :
+     na
+
+plot(plotSeries, title="Core Score")
+
+// Dashboard View
+string dashView = input.string("Compact", "Dashboard View", options=["Compact","Debug","Off"])
+
+// Signal Card (compact usage)
+string SIG_TITLE = TRIGGER_OK ? "SIGNAL" : "LAST CHECK"
+string SIG_LINE1 = (PA_DIR==1?"LONG":"SHORT") + " | " + SETUP_GRADE_RAW + " | CONF " + str.tostring(CONF_SCORE) + "/7"
+string SIG_LINE2 = "Zone " + str.tostring(ENTRY_ZONE_LOW, "#.####") + "-" + str.tostring(ENTRY_ZONE_HIGH, "#.####")
+string SIG_LINE3 = "TP " + str.tostring(TP1, "#.####") + " | " + str.tostring(TP2, "#.####") + " | " + str.tostring(TP3, "#.####")
+string SIG_LINE4 = "ROT " + ROT_STATE + " (" + str.tostring(ROT_SCORE, "#.##") + ")"
+
+// Use a fixed-size table (safe). We only fill the needed rows per view.
+var table dash = table.new(position.top_right, 2, 26)
+
+if barstate.islast
+    // OFF
+    if dashView == "Off"
+        table.cell(dash, 0, 0, "DASH")
+        table.cell(dash, 1, 0, "OFF")
+
+    // COMPACT (14 rows)
+    else if dashView == "Compact"
+        table.cell(dash, 0, 0, "Mode")
+        table.cell(dash, 1, 0, mode + (GUARD_HARD ? " (H)" : " (S)"))
+
+        table.cell(dash, 0, 1, "TF")
+        table.cell(dash, 1, 1, timeframe.period + " | " + TF2 + "/" + TF3)
+
+        table.cell(dash, 0, 2, "Guard")
+        table.cell(dash, 1, 2, (TF_OK ? "OK" : "BLOCK") + " " + TF_CLASS)
+
+        table.cell(dash, 0, 3, "Authority")
+        table.cell(dash, 1, 3, AUTH + " | PA_DIR " + str.tostring(PA_DIR))
+
+        table.cell(dash, 0, 4, "Gates/Reason")
+        table.cell(dash, 1, 4, (GATE_BIAS ? "B" : "-") + (GATE_CTX ? "C" : "-") + (GATE_ZONE ? "Z" : "-") + " | " + BLOCK_REASON)
+
+        table.cell(dash, 0, 5, "CTX/Risk")
+        table.cell(dash, 1, 5, CTX + " | " + RISK)
+
+        table.cell(dash, 0, 6, "EMA")
+        table.cell(dash, 1, 6, (emaTF1Long ? "TF1 L" : emaTF1Short ? "TF1 S" : "TF1 -") + " | " + (emaTF3Long ? "TF3 L" : emaTF3Short ? "TF3 S" : "TF3 -"))
+
+        table.cell(dash, 0, 7, "Zone")
+        table.cell(dash, 1, 7, str.tostring(ENTRY_ZONE_LOW, "#.####") + " - " + str.tostring(ENTRY_ZONE_HIGH, "#.####"))
+
+        table.cell(dash, 0, 8, "TPs")
+        table.cell(dash, 1, 8, str.tostring(TP1, "#.####") + " | " + str.tostring(TP2, "#.####") + " | " + str.tostring(TP3, "#.####"))
+
+        table.cell(dash, 0, 9, "CONF")
+        table.cell(dash, 1, 9, str.tostring(CONF_SCORE) + "/7 | " + str.tostring(CONF_W, "#.0") + "% | " + RISK_TIER)
+
+        table.cell(dash, 0, 10, "RR/SL")
+        table.cell(dash, 1, 10, "RR1 " + str.tostring(RR1, "#.##") + " | SL " + str.tostring(SL, "#.####"))
+
+        table.cell(dash, 0, 11, "ROT")
+        table.cell(dash, 1, 11, ROT_STATE + " (" + str.tostring(ROT_SCORE, "#.##") + ")")
+
+        table.cell(dash, 0, 12, "ROT_GATE")
+        table.cell(dash, 1, 12, (rotGateEnabled ? (ROT_GATE_OK ? "OK" : "BLOCK") : "OFF"))
+
+        table.cell(dash, 0, 13, "Macro")
+        table.cell(dash, 1, 13, MACRO_TF + " | " + (GOLD_OK ? "G" : "-") + (DXY_OK ? "D" : "-"))
+
+        table.cell(dash, 0, 14, SIG_TITLE)
+        table.cell(dash, 1, 14, SIG_LINE1)
+
+        // NOTE: If you want the other Signal lines, switch to Debug
+        // to avoid making Compact taller.
+
+    // DEBUG (26 rows)
+    else
+        table.cell(dash, 0, 0, "X")
+        table.cell(dash, 1, 0, X)
+
+        table.cell(dash, 0, 1, "Mode")
+        table.cell(dash, 1, 1, mode + (GUARD_HARD ? " (HARD)" : " (SOFT)"))
+
+        table.cell(dash, 0, 2, "TF Guard")
+        table.cell(dash, 1, 2, (TF_OK ? "OK" : "BLOCK") + " / " + TF_CLASS)
+
+        table.cell(dash, 0, 3, "Authority")
+        table.cell(dash, 1, 3, AUTH)
+
+        table.cell(dash, 0, 4, "TF3 Bias Dir")
+        table.cell(dash, 1, 4, str.tostring(extDir3))
+
+        table.cell(dash, 0, 5, "Bias Aligned")
+        table.cell(dash, 1, 5, biasAligned ? "Yes" : "No")
+
+        table.cell(dash, 0, 6, "Context")
+        table.cell(dash, 1, 6, CTX)
+
+        table.cell(dash, 0, 7, "Risk")
+        table.cell(dash, 1, 7, RISK)
+
+        table.cell(dash, 0, 8, "Auto-Flip")
+        table.cell(dash, 1, 8, FLIP)
+
+        table.cell(dash, 0, 9, "Corr(P,Ret)")
+        table.cell(dash, 1, 9, str.tostring(corr, "#.##"))
+
+        table.cell(dash, 0, 10, "Entry Allowed")
+        table.cell(dash, 1, 10, ENTRY_ALLOWED ? "YES" : "NO")
+
+        table.cell(dash, 0, 11, "PA_MSS/OB")
+        table.cell(dash, 1, 11, (not na(PA_MSS) and not na(PA_OB_LOW)) ? "Ready" : "n/a")
+
+        table.cell(dash, 0, 12, "PA_DIR")
+        table.cell(dash, 1, 12, str.tostring(PA_DIR))
+
+        table.cell(dash, 0, 13, "TF2/TF3")
+        table.cell(dash, 1, 13, TF2 + " / " + TF3)
+
+        table.cell(dash, 0, 14, "TF1")
+        table.cell(dash, 1, 14, timeframe.period)
+
+        table.cell(dash, 0, 15, "IN_ZONE/SETUP_OK")
+        table.cell(dash, 1, 15, (IN_ZONE ? "IN" : "OUT") + " / " + (SETUP_OK ? "YES" : "NO"))
+
+        table.cell(dash, 0, 16, "Entry Zone")
+        table.cell(dash, 1, 16, str.tostring(ENTRY_ZONE_LOW, "#.####") + " - " + str.tostring(ENTRY_ZONE_HIGH, "#.####"))
+
+        table.cell(dash, 0, 17, "ENTRY_REF")
+        table.cell(dash, 1, 17, str.tostring(ENTRY_REF, "#.####"))
+
+        table.cell(dash, 0, 18, "TP1/TP2/TP3")
+        table.cell(dash, 1, 18, str.tostring(TP1, "#.####") + " | " + str.tostring(TP2, "#.####") + " | " + str.tostring(TP3, "#.####"))
+
+        table.cell(dash, 0, 19, "SL/RR1")
+        table.cell(dash, 1, 19, "SL " + str.tostring(SL, "#.####") + " | RR1 " + str.tostring(RR1, "#.##"))
+
+        table.cell(dash, 0, 20, "EMA TF1")
+        table.cell(dash, 1, 20, emaTF1Long ? "Long" : emaTF1Short ? "Short" : "Flat")
+
+        table.cell(dash, 0, 21, "EMA TF3")
+        table.cell(dash, 1, 21, emaTF3Long ? "Long" : emaTF3Short ? "Short" : "Flat")
+
+        table.cell(dash, 0, 22, "CONF_SCORE")
+        table.cell(dash, 1, 22, str.tostring(CONF_SCORE) + " / 7")
+
+        table.cell(dash, 0, 23, "CONF_W")
+        table.cell(dash, 1, 23, str.tostring(CONF_W, "#.0") + "% | " + RISK_TIER)
+
+        table.cell(dash, 0, 24, "Rotation")
+        table.cell(dash, 1, 24, ROT_STATE)
+
+        table.cell(dash, 0, 25, "ROT_GATE")
+        table.cell(dash, 1, 25, (rotGateEnabled ? (ROT_GATE_OK ? "OK" : "BLOCK") : "OFF"))
