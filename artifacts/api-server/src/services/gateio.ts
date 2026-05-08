@@ -137,6 +137,28 @@ export interface PriceTriggeredOrder {
   reason: string;
 }
 
+export interface PriceTriggeredOrderDetail {
+  id: number;
+  status: "open" | "cancelled" | "finish" | "failed" | "expired";
+  reason: string;
+  put: {
+    filled_total: string;
+    amount: string;
+    price: string;
+    avg_deal_price: string;
+    left: string;
+  };
+  trigger: {
+    price: string;
+    rule: ">=" | "<=";
+  };
+  market: string;
+}
+
+export async function getPriceTriggeredOrder(orderId: number, currencyPair: string): Promise<PriceTriggeredOrderDetail> {
+  return request<PriceTriggeredOrderDetail>("GET", `/spot/price_orders/${orderId}`, { market: currencyPair });
+}
+
 export async function placePriceTriggeredOrder(params: {
   currencyPair: string;
   triggerPrice: string;

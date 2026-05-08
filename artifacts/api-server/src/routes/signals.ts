@@ -10,7 +10,19 @@ import {
 
 const router = Router();
 
+// Optional webhook secret — set WEBHOOK_SECRET env var to enable
+// TradingView: append ?secret=YOUR_SECRET to the webhook URL
 router.post("/webhook", async (req, res): Promise<void> => {
+  const webhookSecret = process.env.WEBHOOK_SECRET;
+  if (webhookSecret) {
+    const provided = (req.query.secret as string | undefined) ?? req.headers["x-webhook-secret"];
+    if (!provided || provided !== webhookSecret) {
+      req.log.warn({ ip: req.ip }, "Webhook: rejected — invalid or missing secret");
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+  }
+
   const parsed = ReceiveWebhookBody.safeParse(req.body);
   if (!parsed.success) {
     req.log.warn({ errors: parsed.error.message }, "Invalid webhook payload");

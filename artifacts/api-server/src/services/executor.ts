@@ -1,5 +1,5 @@
 import { db, botConfigTable, tradesTable } from "@workspace/db";
-import { eq, inArray, and, gte } from "drizzle-orm";
+import { eq, inArray, and, gte, count } from "drizzle-orm";
 import type { Signal } from "@workspace/db";
 import {
   getUsdtBalance,
@@ -66,7 +66,7 @@ export async function executeSignal(signal: Signal): Promise<void> {
 
   // Max open trades guard
   const [openCountRow] = await db
-    .select({ c: db.$count(tradesTable, inArray(tradesTable.status, ["open", "paper"])) })
+    .select({ c: count() })
     .from(tradesTable)
     .where(inArray(tradesTable.status, ["open", "paper"]));
   const openCount = Number(openCountRow?.c ?? 0);
