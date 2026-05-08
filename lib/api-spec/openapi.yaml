@@ -3,13 +3,15 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Trading Signal Dashboard API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: signals
+    description: Trading signal operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,127 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /signals/webhook:
+    post:
+      operationId: receiveWebhook
+      tags: [signals]
+      summary: Receive TradingView alert webhook
+      description: Receives a JSON alert payload from TradingView and stores it as a signal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookPayload"
+      responses:
+        "201":
+          description: Signal stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Signal"
+
+  /signals:
+    get:
+      operationId: listSignals
+      tags: [signals]
+      summary: List all signals
+      description: Returns paginated list of signals, newest first
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: symbol
+          in: query
+          schema:
+            type: string
+        - name: dir
+          in: query
+          schema:
+            type: string
+            enum: [LONG, SHORT]
+        - name: triggered
+          in: query
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: List of signals
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignalList"
+
+  /signals/latest:
+    get:
+      operationId: getLatestSignal
+      tags: [signals]
+      summary: Get most recent signal
+      responses:
+        "200":
+          description: Latest signal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Signal"
+        "404":
+          description: No signals yet
+
+  /signals/stats:
+    get:
+      operationId: getSignalStats
+      tags: [signals]
+      summary: Aggregate stats across all signals
+      responses:
+        "200":
+          description: Signal statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignalStats"
+
+  /signals/{id}:
+    get:
+      operationId: getSignal
+      tags: [signals]
+      summary: Get a single signal by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Signal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Signal"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteSignal
+      tags: [signals]
+      summary: Delete a signal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +157,236 @@ components:
       required:
         - status
 
+    WebhookPayload:
+      type: object
+      description: JSON alert payload from TradingView Pine Script
+      properties:
+        symbol:
+          type: string
+        tf:
+          type: string
+        mode:
+          type: string
+        macro_tf:
+          type: string
+        dir:
+          type: string
+          enum: [LONG, SHORT]
+        auth:
+          type: string
+        pa_mss:
+          type: number
+        ob_low:
+          type: number
+        ob_high:
+          type: number
+        zone_low:
+          type: number
+        zone_high:
+          type: number
+        entry_ref:
+          type: number
+        sl:
+          type: number
+        rr1:
+          type: number
+        tp1:
+          type: number
+        tp2:
+          type: number
+        tp3:
+          type: number
+        conf:
+          type: integer
+        conf_w:
+          type: number
+        risk_tier:
+          type: string
+          enum: [HIGH_CONF, MID_CONF, LOW_CONF]
+        grade:
+          type: string
+        rot:
+          type: string
+        rot_score:
+          type: number
+        block_reason:
+          type: string
+        tf2:
+          type: string
+        tf3:
+          type: string
+      required:
+        - symbol
+        - tf
+        - dir
+
+    Signal:
+      type: object
+      properties:
+        id:
+          type: integer
+        receivedAt:
+          type: string
+          format: date-time
+        symbol:
+          type: string
+        tf:
+          type: string
+        mode:
+          type: string
+        macroTf:
+          type: string
+        dir:
+          type: string
+          enum: [LONG, SHORT]
+        auth:
+          type: string
+        paMss:
+          type: number
+          nullable: true
+        obLow:
+          type: number
+          nullable: true
+        obHigh:
+          type: number
+          nullable: true
+        zoneLow:
+          type: number
+          nullable: true
+        zoneHigh:
+          type: number
+          nullable: true
+        entryRef:
+          type: number
+          nullable: true
+        sl:
+          type: number
+          nullable: true
+        rr1:
+          type: number
+          nullable: true
+        tp1:
+          type: number
+          nullable: true
+        tp2:
+          type: number
+          nullable: true
+        tp3:
+          type: number
+          nullable: true
+        conf:
+          type: integer
+          nullable: true
+        confW:
+          type: number
+          nullable: true
+        riskTier:
+          type: string
+          nullable: true
+        grade:
+          type: string
+          nullable: true
+        triggered:
+          type: boolean
+        rot:
+          type: string
+          nullable: true
+        rotScore:
+          type: number
+          nullable: true
+        blockReason:
+          type: string
+          nullable: true
+        tf2:
+          type: string
+          nullable: true
+        tf3:
+          type: string
+          nullable: true
+        rawPayload:
+          type: object
+          nullable: true
+      required:
+        - id
+        - receivedAt
+        - symbol
+        - tf
+        - dir
+        - triggered
+
+    SignalList:
+      type: object
+      properties:
+        signals:
+          type: array
+          items:
+            $ref: "#/components/schemas/Signal"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - signals
+        - total
+        - limit
+        - offset
+
+    SignalStats:
+      type: object
+      properties:
+        total:
+          type: integer
+        triggered:
+          type: integer
+        blocked:
+          type: integer
+        longs:
+          type: integer
+        shorts:
+          type: integer
+        avgConfW:
+          type: number
+          nullable: true
+        highConf:
+          type: integer
+        midConf:
+          type: integer
+        lowConf:
+          type: integer
+        symbolBreakdown:
+          type: array
+          items:
+            type: object
+            properties:
+              symbol:
+                type: string
+              count:
+                type: integer
+            required:
+              - symbol
+              - count
+        gradeBreakdown:
+          type: array
+          items:
+            type: object
+            properties:
+              grade:
+                type: string
+              count:
+                type: integer
+            required:
+              - grade
+              - count
+      required:
+        - total
+        - triggered
+        - blocked
+        - longs
+        - shorts
+        - highConf
+        - midConf
+        - lowConf
+        - symbolBreakdown
+        - gradeBreakdown
