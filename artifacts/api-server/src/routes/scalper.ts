@@ -192,4 +192,131 @@ router.post("/scan/trigger", async (req, res): Promise<void> => {
   res.json({ ok: true, message: "Scan triggered" });
 });
 
+// ── Scan a single user-specified symbol ──────────────────────────────────────
+
+router.post("/scan/symbol", async (req, res): Promise<void> => {
+  const raw = ((req.body as Record<string, unknown>)["symbol"] as string | undefined)?.trim().toUpperCase();
+  if (!raw) { res.status(400).json({ error: "symbol is required" }); return; }
+
+  // Normalise: "BTC" → "BTC_USDT", "BTCUSDT" → "BTC_USDT", "BTC_USDT" → "BTC_USDT"
+  let gateSymbol: string;
+  if (raw.includes("_")) {
+    gateSymbol = raw.endsWith("_USDT") ? raw : `${raw}_USDT`;
+  } else if (raw.endsWith("USDT")) {
+    gateSymbol = `${raw.slice(0, -4)}_USDT`;
+  } else {
+    gateSymbol = `${raw}_USDT`;
+  }
+
+  const [config] = await db.select().from(scalperConfigTable).limit(1);
+  const bbPeriod = config?.bbPeriod ?? 20;
+  const bbStdDev = config?.bbStdDev ?? 2.0;
+  const rsiPeriod = config?.rsiPeriod ?? 14;
+  const rsiOversold = config?.rsiOversold ?? 35;
+  const rsiOverbought = config?.rsiOverbought ?? 65;
+  const volumeSpikeMultiplier = config?.volumeSpikeMultiplier ?? 1.5;
+
+  try {
+    const candles = await fetchCandles(gateSymbol, "5m", 60);
+    const closes = candles.map((c) => c.close);
+    const volumes = candles.map((c) => c.volume);
+
+    const bb = computeBB(closes, bbPeriod, bbStdDev);
+    const rsi = computeRSI(closes, rsiPeriod);
+    const volumeRatio = computeVolumeRatio(volumes);
+    const lastClose = closes[closes.length - 1];
+
+    const hasVolumeSpike = volumeRatio >= volumeSpikeMultiplier;
+    const nearLower = lastClose <= bb.lower * 1.001;
+    const nearUpper = lastClose >= bb.upper * 0.999;
+    const longSignal = lastClose <= bb.lower && rsi <= rsiOversold && hasVolumeSpike;
+    const shortSignal = lastClose >= bb.upper && rsi >= rsiOverbought && hasVolumeSpike;
+
+    req.log.info({ gateSymbol, lastClose, rsi, volumeRatio }, "Manual symbol scan");
+
+    res.json({
+      gateSymbol,
+      lastClose: parseFloat(lastClose.toFixed(8)),
+      bbUpper: parseFloat(bb.upper.toFixed(8)),
+      bbLower: parseFloat(bb.lower.toFixed(8)),
+      bbMid: parseFloat(bb.mid.toFixed(8)),
+      rsi: parseFloat(rsi.toFixed(2)),
+      volumeRatio: parseFloat(volumeRatio.toFixed(3)),
+      nearLower,
+      nearUpper,
+      longSignal,
+      shortSignal,
+      hasVolumeSpike,
+      scannedAt: new Date(),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(502).json({ error: `Failed to fetch data for ${gateSymbol}: ${msg}` });
+  }
+});
+
+// ── Manual trade entry (force-enter regardless of indicator conditions) ───────
+
+router.post("/trade/manual", async (req, res): Promise<void> => {
+  const body = req.body as Record<string, unknown>;
+  const raw = (body["symbol"] as string | undefined)?.trim().toUpperCase();
+  const side = body["side"] as string | undefined;
+
+  if (!raw) { res.status(400).json({ error: "symbol is required" }); return; }
+  if (side !== "buy" && side !== "sell") { res.status(400).json({ error: "side must be 'buy' or 'sell'" }); return; }
+
+  let gateSymbol: string;
+  if (raw.includes("_")) {
+    gateSymbol = raw.endsWith("_USDT") ? raw : `${raw}_USDT`;
+  } else if (raw.endsWith("USDT")) {
+    gateSymbol = `${raw.slice(0, -4)}_USDT`;
+  } else {
+    gateSymbol = `${raw}_USDT`;
+  }
+
+  const [config] = await db.select().from(scalperConfigTable).limit(1);
+  if (!config?.enabled) {
+    res.status(400).json({ error: "Scalper bot is disabled — enable it first" });
+    return;
+  }
+
+  const bbPeriod = config.bbPeriod ?? 20;
+  const bbStdDev = config.bbStdDev ?? 2.0;
+  const rsiPeriod = config.rsiPeriod ?? 14;
+
+  try {
+    const candles = await fetchCandles(gateSymbol, "5m", 60);
+    const closes = candles.map((c) => c.close);
+    const volumes = candles.map((c) => c.volume);
+
+    const bb = computeBB(closes, bbPeriod, bbStdDev);
+    const rsi = computeRSI(closes, rsiPeriod);
+    const volumeRatio = computeVolumeRatio(volumes);
+    const lastClose = closes[closes.length - 1];
+    const symbol = gateSymbol.replace("_USDT", "");
+
+    const signal = {
+      symbol,
+      gateSymbol,
+      side: side as "buy" | "sell",
+      entryPrice: lastClose,
+      bbUpper: bb.upper,
+      bbLower: bb.lower,
+      bbMid: bb.mid,
+      rsi,
+      volumeRatio,
+    };
+
+    req.log.info({ gateSymbol, side, lastClose }, "Manual trade entry requested");
+
+    const { executeScalperSignal } = await import("../services/scalper-executor.js");
+    await executeScalperSignal(signal);
+
+    res.json({ ok: true, gateSymbol, side, entryPrice: lastClose });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(502).json({ error: msg });
+  }
+});
+
 export default router;

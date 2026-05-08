@@ -6,7 +6,7 @@ import {
 import {
   Zap, Play, Square, RefreshCw, TrendingUp, TrendingDown, DollarSign,
   AlertTriangle, CheckCircle2, Clock, BarChart3, ArrowUpRight, ArrowDownRight,
-  ChevronDown, ChevronUp, Shield,
+  ChevronDown, ChevronUp, Shield, Search, LogIn,
 } from "lucide-react";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -99,6 +99,22 @@ interface ScanRow {
   error?: string;
 }
 
+interface ManualScanResult {
+  gateSymbol: string;
+  lastClose: number;
+  bbUpper: number;
+  bbLower: number;
+  bbMid: number;
+  rsi: number;
+  volumeRatio: number;
+  nearLower: boolean;
+  nearUpper: boolean;
+  longSignal: boolean;
+  shortSignal: boolean;
+  hasVolumeSpike: boolean;
+  scannedAt: string;
+}
+
 function useFetch<T>(url: string, intervalMs = 15000) {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
@@ -142,6 +158,13 @@ export function ScalperPage() {
   const [showScan, setShowScan] = useState(false);
   const [draft, setDraft] = useState<Partial<ScalperConfig>>({});
 
+  // Manual entry state
+  const [manualSymbol, setManualSymbol] = useState("");
+  const [manualScanning, setManualScanning] = useState(false);
+  const [manualResult, setManualResult] = useState<ManualScanResult | null>(null);
+  const [manualError, setManualError] = useState<string | null>(null);
+  const [entering, setEntering] = useState<"buy" | "sell" | null>(null);
+
   const { data: config, refetch: refetchConfig } = useFetch<ScalperConfig>("/api/scalper/config");
   const { data: status, refetch: refetchStatus } = useFetch<ScalperStatus>("/api/scalper/status");
   const { data: trades, refetch: refetchTrades } = useFetch<ScalperTrade[]>("/api/scalper/trades");
@@ -181,6 +204,42 @@ export function ScalperPage() {
   async function cancelTrade(id: number) {
     await api(`/api/scalper/trades/${id}/cancel`, { method: "DELETE" });
     refetchTrades();
+  }
+
+  async function manualScan() {
+    if (!manualSymbol.trim()) return;
+    setManualScanning(true);
+    setManualResult(null);
+    setManualError(null);
+    try {
+      const result = await api<ManualScanResult>("/api/scalper/scan/symbol", {
+        method: "POST",
+        body: JSON.stringify({ symbol: manualSymbol.trim() }),
+      });
+      setManualResult(result);
+    } catch (e) {
+      setManualError(String(e));
+    } finally {
+      setManualScanning(false);
+    }
+  }
+
+  async function manualEnter(side: "buy" | "sell") {
+    if (!manualResult) return;
+    setEntering(side);
+    try {
+      await api("/api/scalper/trade/manual", {
+        method: "POST",
+        body: JSON.stringify({ symbol: manualResult.gateSymbol, side }),
+      });
+      setManualResult(null);
+      setManualSymbol("");
+      setTimeout(() => { refetchTrades(); refetchStatus(); }, 1500);
+    } catch (e) {
+      alert(String(e));
+    } finally {
+      setEntering(null);
+    }
   }
 
   async function triggerScan() {
@@ -627,6 +686,115 @@ export function ScalperPage() {
                 <div>Entry conditions (all three must be met simultaneously):</div>
                 <div className="text-green-400">LONG: price ≤ BB lower  AND  RSI ≤ oversold  AND  volume ≥ {fmt(field("volumeSpikeMultiplier", 1.5), 1)}× 20-period avg</div>
                 <div className="text-red-400">SHORT: price ≥ BB upper  AND  RSI ≥ overbought  AND  volume ≥ {fmt(field("volumeSpikeMultiplier", 1.5), 1)}× 20-period avg</div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ─── Manual Entry ────────────────────────────────────────────────────── */}
+      <div className="border border-border">
+        <div className="p-3 border-b border-border flex items-center gap-2">
+          <LogIn className="w-3.5 h-3.5 text-yellow-400" />
+          <span className="text-xs font-bold tracking-widest">MANUAL ENTRY — SCAN ANY COIN & ENTER NOW</span>
+        </div>
+        <div className="p-4 space-y-4">
+          <p className="text-xs text-muted-foreground">
+            Spotted a setup? Type any Gate.io USDT symbol, scan it to see live indicators, then force-enter Long or Short instantly — bypasses the automatic signal filter.
+          </p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              placeholder="e.g. BTC, ETH, XRP, PEPE…"
+              value={manualSymbol}
+              onChange={(e) => { setManualSymbol(e.target.value); setManualResult(null); setManualError(null); }}
+              onKeyDown={(e) => e.key === "Enter" && manualScan()}
+              className="flex-1 bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary uppercase placeholder:normal-case placeholder:text-muted-foreground/50"
+            />
+            <button
+              onClick={manualScan}
+              disabled={manualScanning || !manualSymbol.trim()}
+              className="flex items-center gap-2 px-4 py-2 border border-border text-xs hover:border-primary/50 transition-colors disabled:opacity-50"
+            >
+              <Search className={`w-3.5 h-3.5 ${manualScanning ? "animate-pulse" : ""}`} />
+              {manualScanning ? "Scanning…" : "Scan"}
+            </button>
+          </div>
+
+          {manualError && (
+            <div className="flex items-center gap-2 text-xs text-red-400 border border-red-500/30 bg-red-500/5 p-3">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />{manualError}
+            </div>
+          )}
+
+          {manualResult && (
+            <div className="border border-border bg-secondary/20 space-y-0">
+              {/* Symbol header */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+                <div className="font-bold font-mono text-sm">{manualResult.gateSymbol}</div>
+                <div className="text-xs text-muted-foreground">
+                  Scanned {new Date(manualResult.scannedAt).toLocaleTimeString()}
+                </div>
+              </div>
+
+              {/* Metrics grid */}
+              <div className="grid grid-cols-3 md:grid-cols-6 divide-x divide-border text-xs font-mono">
+                {[
+                  { label: "PRICE", value: manualResult.lastClose.toFixed(manualResult.lastClose < 1 ? 6 : 4), color: "" },
+                  { label: "BB LOWER", value: manualResult.bbLower.toFixed(manualResult.lastClose < 1 ? 6 : 4), color: manualResult.nearLower ? "text-green-400" : "" },
+                  { label: "BB UPPER", value: manualResult.bbUpper.toFixed(manualResult.lastClose < 1 ? 6 : 4), color: manualResult.nearUpper ? "text-red-400" : "" },
+                  { label: "RSI", value: manualResult.rsi.toFixed(1), color: manualResult.rsi <= 35 ? "text-green-400" : manualResult.rsi >= 65 ? "text-red-400" : "" },
+                  { label: "VOL RATIO", value: `${manualResult.volumeRatio.toFixed(2)}×`, color: manualResult.hasVolumeSpike ? "text-yellow-400" : "" },
+                  {
+                    label: "AUTO SIGNAL",
+                    value: manualResult.longSignal ? "LONG ✓" : manualResult.shortSignal ? "SHORT ✓" : "NONE",
+                    color: manualResult.longSignal ? "text-green-400" : manualResult.shortSignal ? "text-red-400" : "text-muted-foreground",
+                  },
+                ].map(({ label, value, color }) => (
+                  <div key={label} className="px-3 py-3 space-y-0.5">
+                    <div className="text-muted-foreground tracking-widest" style={{ fontSize: "10px" }}>{label}</div>
+                    <div className={`font-bold ${color}`}>{value}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Condition checklist */}
+              <div className="px-4 py-2 border-t border-border flex flex-wrap gap-4 text-xs">
+                {[
+                  { label: "Near BB Lower", ok: manualResult.nearLower },
+                  { label: "Near BB Upper", ok: manualResult.nearUpper },
+                  { label: "RSI Oversold (≤35)", ok: manualResult.rsi <= 35 },
+                  { label: "RSI Overbought (≥65)", ok: manualResult.rsi >= 65 },
+                  { label: "Volume Spike", ok: manualResult.hasVolumeSpike },
+                ].map(({ label, ok }) => (
+                  <span key={label} className={`flex items-center gap-1 ${ok ? "text-green-400" : "text-muted-foreground"}`}>
+                    {ok ? <CheckCircle2 className="w-3 h-3" /> : <span className="w-3 h-3 inline-flex items-center justify-center text-muted-foreground/40">○</span>}
+                    {label}
+                  </span>
+                ))}
+              </div>
+
+              {/* Action buttons */}
+              <div className="px-4 py-3 border-t border-border flex items-center gap-3">
+                <span className="text-xs text-muted-foreground flex-1">Force-enter bypasses indicator conditions and opens immediately at live price.</span>
+                <button
+                  onClick={() => manualEnter("buy")}
+                  disabled={entering !== null}
+                  className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold border border-green-500/50 text-green-400 hover:bg-green-500/10 transition-colors disabled:opacity-50"
+                >
+                  <ArrowUpRight className="w-3.5 h-3.5" />
+                  {entering === "buy" ? "Entering…" : "Enter LONG"}
+                </button>
+                {!field("longOnly", false) && (
+                  <button
+                    onClick={() => manualEnter("sell")}
+                    disabled={entering !== null}
+                    className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold border border-red-500/50 text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+                  >
+                    <ArrowDownRight className="w-3.5 h-3.5" />
+                    {entering === "sell" ? "Entering…" : "Enter SHORT"}
+                  </button>
+                )}
               </div>
             </div>
           )}
