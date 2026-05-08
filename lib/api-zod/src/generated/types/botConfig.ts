@@ -11,6 +11,10 @@ export interface BotConfig {
   enabled: boolean;
   paperMode: boolean;
   longOnly: boolean;
+  /** all | scalp | intraday | swing | position */
+  tradingMode: string;
+  compoundingEnabled: boolean;
+  compoundBalance?: number | null;
   positionSizeUsdt: number;
   minConfW: number;
   minGrade: string;

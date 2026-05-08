@@ -1,4 +1,4 @@
-import { db, tradesTable } from "@workspace/db";
+import { db, tradesTable, botConfigTable } from "@workspace/db";
 import { eq, inArray } from "drizzle-orm";
 import { getLivePrice, getSpotOrder, getPriceTriggeredOrder } from "./gateio";
 import { logger } from "../lib/logger";
@@ -6,11 +6,34 @@ import { notifyTradeClosed } from "./notify";
 
 export let lastSyncAt: Date | null = null;
 
+/**
+ * After a trade closes, update the compound balance if compounding is enabled.
+ * compoundBalance = max(current + pnl, 10% of original positionSizeUsdt)
+ */
+async function updateCompoundBalance(pnl: number | null): Promise<void> {
+  if (pnl == null) return;
+  try {
+    const [config] = await db.select().from(botConfigTable).limit(1);
+    if (!config || !config.compoundingEnabled || config.compoundBalance == null) return;
+
+    const newBalance = Math.max(config.compoundBalance + pnl, config.positionSizeUsdt * 0.1);
+    await db.update(botConfigTable)
+      .set({ compoundBalance: parseFloat(newBalance.toFixed(4)), updatedAt: new Date() })
+      .where(eq(botConfigTable.id, config.id));
+
+    logger.info(
+      { oldBalance: config.compoundBalance, pnl, newBalance },
+      "Compound balance updated after trade close"
+    );
+  } catch (err) {
+    logger.warn({ err }, "Failed to update compound balance");
+  }
+}
+
 async function syncOpenTrade(trade: typeof tradesTable.$inferSelect): Promise<void> {
   const { id, gateSymbol, side, entryPrice, quantity, paperMode } = trade;
 
   if (paperMode) {
-    // For paper trades: fetch live price, compute unrealized P&L, and simulate SL/TP hits
     try {
       const livePrice = await getLivePrice(gateSymbol);
       const pnl =
@@ -18,7 +41,6 @@ async function syncOpenTrade(trade: typeof tradesTable.$inferSelect): Promise<vo
           ? (side === "buy" ? livePrice - entryPrice : entryPrice - livePrice) * quantity
           : null;
 
-      // Auto-close paper trade when SL or TP levels are hit
       let closeReason: string | null = null;
       if (trade.slPrice != null) {
         const slHit = side === "buy" ? livePrice <= trade.slPrice : livePrice >= trade.slPrice;
@@ -61,6 +83,7 @@ async function syncOpenTrade(trade: typeof tradesTable.$inferSelect): Promise<vo
           paperMode: true,
           positionSizeUsdt: trade.positionSizeUsdt,
         });
+        await updateCompoundBalance(closedPnl);
       } else {
         await db.update(tradesTable)
           .set({ livePrice, pnl })
@@ -72,8 +95,6 @@ async function syncOpenTrade(trade: typeof tradesTable.$inferSelect): Promise<vo
     return;
   }
 
-  // For live trades: check each SL/TP price-triggered order to detect fills
-  // These are price_orders (not spot orders), so we use getPriceTriggeredOrder()
   const orderChecks: { orderId: number; reason: string }[] = [];
 
   if (trade.slOrderId) orderChecks.push({ orderId: Number(trade.slOrderId), reason: "sl" });
@@ -84,7 +105,6 @@ async function syncOpenTrade(trade: typeof tradesTable.$inferSelect): Promise<vo
   for (const { orderId, reason } of orderChecks) {
     try {
       const order = await getPriceTriggeredOrder(orderId, gateSymbol);
-      // "finish" means the triggered limit order was placed and fully filled
       if (order.status === "finish") {
         const closePrice = parseFloat(order.put.avg_deal_price || order.put.price);
         const closedQty = parseFloat(order.put.amount) - parseFloat(order.put.left || "0");
@@ -112,6 +132,7 @@ async function syncOpenTrade(trade: typeof tradesTable.$inferSelect): Promise<vo
           paperMode: false,
           positionSizeUsdt: trade.positionSizeUsdt,
         });
+        await updateCompoundBalance(pnl);
         return;
       }
     } catch (err) {
@@ -119,7 +140,6 @@ async function syncOpenTrade(trade: typeof tradesTable.$inferSelect): Promise<vo
     }
   }
 
-  // Also track current live price for unrealized PnL on open live trades
   try {
     const livePrice = await getLivePrice(gateSymbol);
     const pnl =
@@ -154,7 +174,6 @@ let syncInterval: ReturnType<typeof setInterval> | null = null;
 export function startSyncLoop(intervalMs = 30_000): void {
   if (syncInterval) return;
 
-  // First sync after 5s startup delay
   setTimeout(() => {
     syncAllOpenTrades().catch((err) => logger.error({ err }, "Sync: initial run failed"));
   }, 5000);

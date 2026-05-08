@@ -151,6 +151,10 @@ export interface BotConfig {
   enabled: boolean;
   paperMode: boolean;
   longOnly: boolean;
+  /** all | scalp | intraday | swing | position */
+  tradingMode: string;
+  compoundingEnabled: boolean;
+  compoundBalance?: number | null;
   positionSizeUsdt: number;
   minConfW: number;
   minGrade: string;
@@ -171,6 +175,9 @@ export interface BotConfigPatch {
   enabled?: boolean;
   paperMode?: boolean;
   longOnly?: boolean;
+  tradingMode?: string;
+  compoundingEnabled?: boolean;
+  compoundBalance?: number | null;
   positionSizeUsdt?: number;
   minConfW?: number;
   minGrade?: string;
@@ -262,6 +269,47 @@ export interface Trade {
 export interface TradeList {
   trades: Trade[];
   total: number;
+}
+
+export interface MarketSpreads {
+  /** BTC.D / (USDT.D+USDC.D) */
+  btcDivStable: number;
+  /** (USDT.D+USDC.D) / BTC.D */
+  stableDivBtc: number;
+  /** BTC.D - Stable.D */
+  btcMinusStable: number;
+  /** (BTC.D+ETH.D) / OTHERS.D */
+  largecapDivOthers: number;
+  /** TOTALES.D / Stable.D */
+  totalDivStable: number;
+  /** USDT.D / USDC.D */
+  usdtDivUsdc: number;
+}
+
+export type MarketStatusRegime =
+  (typeof MarketStatusRegime)[keyof typeof MarketStatusRegime];
+
+export const MarketStatusRegime = {
+  RISK_OFF: "RISK_OFF",
+  BTC_DOMINANT: "BTC_DOMINANT",
+  ETH_SEASON: "ETH_SEASON",
+  ALT_SEASON: "ALT_SEASON",
+  NEUTRAL: "NEUTRAL",
+} as const;
+
+export interface MarketStatus {
+  btcDominance: number;
+  ethDominance: number;
+  stableDominance: number;
+  othersDominance: number;
+  totalMarketCapUsd?: number | null;
+  marketCapChange24h?: number | null;
+  spreads: MarketSpreads;
+  regime: MarketStatusRegime;
+  regimeScore: number;
+  latestRotation?: string | null;
+  latestRotScore?: number | null;
+  lastUpdated: string;
 }
 
 export type ListSignalsParams = {

@@ -18,6 +18,15 @@ const GRADE_ORDER: Record<string, number> = {
   "A+ Setup": 3,
 };
 
+// Size multipliers per trading mode
+const MODE_SIZE_MULTIPLIER: Record<string, number> = {
+  all: 1.0,
+  scalp: 0.5,
+  intraday: 1.0,
+  swing: 1.5,
+  position: 2.0,
+};
+
 function gradeAtLeast(actual: string | null | undefined, minimum: string): boolean {
   const a = GRADE_ORDER[actual ?? "None"] ?? 0;
   const m = GRADE_ORDER[minimum] ?? 0;
@@ -26,6 +35,17 @@ function gradeAtLeast(actual: string | null | undefined, minimum: string): boole
 
 function roundTo(value: number, decimals: number): string {
   return value.toFixed(decimals);
+}
+
+/**
+ * Check if the signal's mode matches the configured trading mode filter.
+ * "all" and "position" accept all signals.
+ * Other modes require the signal's mode field to contain the config mode keyword.
+ */
+function modeAllowed(signalMode: string | null | undefined, tradingMode: string): boolean {
+  if (tradingMode === "all" || tradingMode === "position") return true;
+  if (!signalMode) return true; // no mode on signal — don't filter out
+  return signalMode.toLowerCase().includes(tradingMode.toLowerCase());
 }
 
 export async function executeSignal(signal: Signal): Promise<void> {
@@ -65,6 +85,21 @@ export async function executeSignal(signal: Signal): Promise<void> {
     return;
   }
 
+  // Trading mode filter
+  if (!modeAllowed(signal.mode, config.tradingMode)) {
+    logger.info(
+      { signalId: signal.id, signalMode: signal.mode, tradingMode: config.tradingMode },
+      "Trading mode filter: signal mode does not match, skipping"
+    );
+    return;
+  }
+
+  // Long-only guard
+  if (config.longOnly && signal.dir === "SHORT") {
+    logger.info({ signalId: signal.id }, "Long-only mode: skipping SHORT signal");
+    return;
+  }
+
   // Max open trades guard
   const [openCountRow] = await db
     .select({ c: count() })
@@ -76,7 +111,7 @@ export async function executeSignal(signal: Signal): Promise<void> {
     return;
   }
 
-  // Duplicate symbol guard — skip if already holding a position in this symbol
+  // Duplicate symbol guard
   const [existingTrade] = await db
     .select({ id: tradesTable.id })
     .from(tradesTable)
@@ -93,7 +128,7 @@ export async function executeSignal(signal: Signal): Promise<void> {
     return;
   }
 
-  // Cooldown guard — skip if last trade for this symbol was within cooldownMinutes
+  // Cooldown guard
   if (config.cooldownMinutes > 0) {
     const cutoff = new Date(Date.now() - config.cooldownMinutes * 60_000);
     const [recentTrade] = await db
@@ -116,11 +151,19 @@ export async function executeSignal(signal: Signal): Promise<void> {
     }
   }
 
-  // Long-only guard
-  if (config.longOnly && signal.dir === "SHORT") {
-    logger.info({ signalId: signal.id }, "Long-only mode: skipping SHORT signal");
-    return;
-  }
+  // Determine actual position size:
+  // 1. If compounding enabled and compoundBalance is set, use that as base
+  // 2. Apply mode size multiplier
+  const baseSize = config.compoundingEnabled && config.compoundBalance != null
+    ? config.compoundBalance
+    : config.positionSizeUsdt;
+  const sizeMultiplier = MODE_SIZE_MULTIPLIER[config.tradingMode] ?? 1.0;
+  const effectivePositionSize = parseFloat((baseSize * sizeMultiplier).toFixed(2));
+
+  logger.info(
+    { signalId: signal.id, baseSize, sizeMultiplier, effectivePositionSize, compounding: config.compoundingEnabled, tradingMode: config.tradingMode },
+    "Effective position size determined"
+  );
 
   const gateSymbol = toGateSymbol(signal.symbol);
   const side = signal.dir === "LONG" ? "buy" : "sell";
@@ -131,7 +174,7 @@ export async function executeSignal(signal: Signal): Promise<void> {
     gateSymbol,
     side,
     status: "pending",
-    positionSizeUsdt: config.positionSizeUsdt,
+    positionSizeUsdt: effectivePositionSize,
     slPrice: signal.sl ?? undefined,
     tp1Price: signal.tp1 ?? undefined,
     tp2Price: signal.tp2 ?? undefined,
@@ -140,7 +183,6 @@ export async function executeSignal(signal: Signal): Promise<void> {
   }).returning();
 
   if (config.paperMode) {
-    // Use live market price for realistic paper simulation
     let livePrice: number | undefined;
     try {
       livePrice = await getLivePrice(gateSymbol);
@@ -150,7 +192,7 @@ export async function executeSignal(signal: Signal): Promise<void> {
     }
 
     const entryPrice = livePrice;
-    const quantity = entryPrice ? config.positionSizeUsdt / entryPrice : undefined;
+    const quantity = entryPrice ? effectivePositionSize / entryPrice : undefined;
 
     await db.update(tradesTable).set({
       status: "paper",
@@ -161,14 +203,14 @@ export async function executeSignal(signal: Signal): Promise<void> {
     }).where(eq(tradesTable.id, trade.id));
 
     logger.info(
-      { tradeId: trade.id, symbol: signal.symbol, side, entryPrice, quantity },
+      { tradeId: trade.id, symbol: signal.symbol, side, entryPrice, quantity, effectivePositionSize },
       "Paper trade recorded with live price"
     );
     notifyTradeOpened({
       symbol: signal.symbol,
       side,
       entryPrice,
-      positionSizeUsdt: config.positionSizeUsdt,
+      positionSizeUsdt: effectivePositionSize,
       slPrice: signal.sl,
       tp1Price: signal.tp1,
       paperMode: true,
@@ -181,11 +223,10 @@ export async function executeSignal(signal: Signal): Promise<void> {
       throw new Error(`Balance check failed: ${err instanceof Error ? err.message : String(err)}`);
     });
 
-    if (usdtBalance < config.positionSizeUsdt) {
-      throw new Error(`Insufficient balance: ${usdtBalance.toFixed(2)} USDT available, ${config.positionSizeUsdt} USDT needed`);
+    if (usdtBalance < effectivePositionSize) {
+      throw new Error(`Insufficient balance: ${usdtBalance.toFixed(2)} USDT available, ${effectivePositionSize} USDT needed`);
     }
 
-    // For market sell: need base currency amount = USDT / current price
     let livePrice: number | undefined;
     if (side === "sell") {
       livePrice = await getLivePrice(gateSymbol).catch((err) => {
@@ -193,11 +234,10 @@ export async function executeSignal(signal: Signal): Promise<void> {
       });
     }
 
-    // market buy: amount = USDT (quote currency); market sell: amount = base currency qty
     const orderAmount =
       side === "buy"
-        ? config.positionSizeUsdt.toString()
-        : roundTo(config.positionSizeUsdt / livePrice!, 6);
+        ? effectivePositionSize.toString()
+        : roundTo(effectivePositionSize / livePrice!, 6);
 
     const entryOrder = await placeSpotOrder({
       currencyPair: gateSymbol,
@@ -223,7 +263,7 @@ export async function executeSignal(signal: Signal): Promise<void> {
       symbol: signal.symbol,
       side,
       entryPrice,
-      positionSizeUsdt: config.positionSizeUsdt,
+      positionSizeUsdt: effectivePositionSize,
       slPrice: signal.sl,
       tp1Price: signal.tp1,
       paperMode: false,
@@ -243,7 +283,6 @@ export async function executeSignal(signal: Signal): Promise<void> {
             orderPrice: (signal.sl * 0.999).toFixed(8),
           });
           tpOrders.slOrderId = slOrder.id.toString();
-          logger.info({ tradeId: trade.id, slOrderId: slOrder.id, slPrice: signal.sl }, "LONG SL order placed");
         } catch (err) {
           logger.warn({ tradeId: trade.id, err }, "Failed to place SL order");
         }
@@ -267,14 +306,12 @@ export async function executeSignal(signal: Signal): Promise<void> {
               orderPrice: tp.price.toFixed(8),
             });
             tpOrders[tp.key] = tpOrder.id.toString();
-            logger.info({ tradeId: trade.id, tpOrderId: tpOrder.id, tpPrice: tp.price }, `${tp.key} order placed`);
           } catch (err) {
             logger.warn({ tradeId: trade.id, err }, `Failed to place ${tp.key} order`);
           }
         }
       }
     } else {
-      // SHORT: SL = buy back if price rises, TP = buy back as price falls
       if (config.slEnabled && signal.sl) {
         try {
           const slOrder = await placePriceTriggeredOrder({
@@ -286,7 +323,6 @@ export async function executeSignal(signal: Signal): Promise<void> {
             orderPrice: (signal.sl * 1.001).toFixed(8),
           });
           tpOrders.slOrderId = slOrder.id.toString();
-          logger.info({ tradeId: trade.id, slOrderId: slOrder.id, slPrice: signal.sl }, "SHORT SL (buy-back) order placed");
         } catch (err) {
           logger.warn({ tradeId: trade.id, err }, "Failed to place SHORT SL order");
         }
@@ -310,7 +346,6 @@ export async function executeSignal(signal: Signal): Promise<void> {
               orderPrice: tp.price.toFixed(8),
             });
             tpOrders[tp.key] = tpOrder.id.toString();
-            logger.info({ tradeId: trade.id, tpOrderId: tpOrder.id, tpPrice: tp.price }, `SHORT ${tp.key} buy-back order placed`);
           } catch (err) {
             logger.warn({ tradeId: trade.id, err }, `Failed to place SHORT ${tp.key} order`);
           }

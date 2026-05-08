@@ -15,6 +15,13 @@ export const botConfigTable = pgTable("bot_config", {
 
   longOnly: boolean("long_only").notNull().default(false),
 
+  // Trading mode: "all" | "scalp" | "intraday" | "swing" | "position"
+  tradingMode: text("trading_mode").notNull().default("all"),
+
+  // Compounding: reinvest profits into next position size
+  compoundingEnabled: boolean("compounding_enabled").notNull().default(false),
+  compoundBalance: real("compound_balance"), // null = not initialized; set to positionSizeUsdt on first enable
+
   maxOpenTrades: integer("max_open_trades").notNull().default(3),
   cooldownMinutes: integer("cooldown_minutes").notNull().default(0),
 

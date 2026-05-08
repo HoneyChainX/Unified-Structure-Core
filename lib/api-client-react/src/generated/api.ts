@@ -25,6 +25,7 @@ import type {
   HealthStatus,
   ListSignalsParams,
   ListTradesParams,
+  MarketStatus,
   Signal,
   SignalList,
   SignalStats,
@@ -1273,6 +1274,81 @@ export const useCancelTrade = <
 > => {
   return useMutation(getCancelTradeMutationOptions(options));
 };
+
+/**
+ * @summary Get live market regime, dominance spreads, and rotation state
+ */
+export const getGetMarketStatusUrl = () => {
+  return `/api/market/status`;
+};
+
+export const getMarketStatus = async (
+  options?: RequestInit,
+): Promise<MarketStatus> => {
+  return customFetch<MarketStatus>(getGetMarketStatusUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetMarketStatusQueryKey = () => {
+  return [`/api/market/status`] as const;
+};
+
+export const getGetMarketStatusQueryOptions = <
+  TData = Awaited<ReturnType<typeof getMarketStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getMarketStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetMarketStatusQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getMarketStatus>>> = ({
+    signal,
+  }) => getMarketStatus({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getMarketStatus>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetMarketStatusQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getMarketStatus>>
+>;
+export type GetMarketStatusQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get live market regime, dominance spreads, and rotation state
+ */
+
+export function useGetMarketStatus<
+  TData = Awaited<ReturnType<typeof getMarketStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getMarketStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetMarketStatusQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary Get a single signal by ID

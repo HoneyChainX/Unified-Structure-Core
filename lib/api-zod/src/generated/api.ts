@@ -176,6 +176,11 @@ export const GetBotConfigResponse = zod.object({
   enabled: zod.boolean(),
   paperMode: zod.boolean(),
   longOnly: zod.boolean(),
+  tradingMode: zod
+    .string()
+    .describe("all | scalp | intraday | swing | position"),
+  compoundingEnabled: zod.boolean(),
+  compoundBalance: zod.number().nullish(),
   positionSizeUsdt: zod.number(),
   minConfW: zod.number(),
   minGrade: zod.string(),
@@ -199,6 +204,9 @@ export const UpdateBotConfigBody = zod.object({
   enabled: zod.boolean().optional(),
   paperMode: zod.boolean().optional(),
   longOnly: zod.boolean().optional(),
+  tradingMode: zod.string().optional(),
+  compoundingEnabled: zod.boolean().optional(),
+  compoundBalance: zod.number().nullish(),
   positionSizeUsdt: zod.number().optional(),
   minConfW: zod.number().optional(),
   minGrade: zod.string().optional(),
@@ -219,6 +227,11 @@ export const UpdateBotConfigResponse = zod.object({
   enabled: zod.boolean(),
   paperMode: zod.boolean(),
   longOnly: zod.boolean(),
+  tradingMode: zod
+    .string()
+    .describe("all | scalp | intraday | swing | position"),
+  compoundingEnabled: zod.boolean(),
+  compoundBalance: zod.number().nullish(),
   positionSizeUsdt: zod.number(),
   minConfW: zod.number(),
   minGrade: zod.string(),
@@ -448,6 +461,37 @@ export const CancelTradeResponse = zod.object({
   paperMode: zod.boolean(),
   createdAt: zod.coerce.date(),
   closedAt: zod.coerce.date().nullish(),
+});
+
+/**
+ * @summary Get live market regime, dominance spreads, and rotation state
+ */
+export const GetMarketStatusResponse = zod.object({
+  btcDominance: zod.number(),
+  ethDominance: zod.number(),
+  stableDominance: zod.number(),
+  othersDominance: zod.number(),
+  totalMarketCapUsd: zod.number().nullish(),
+  marketCapChange24h: zod.number().nullish(),
+  spreads: zod.object({
+    btcDivStable: zod.number().describe("BTC.D \/ (USDT.D+USDC.D)"),
+    stableDivBtc: zod.number().describe("(USDT.D+USDC.D) \/ BTC.D"),
+    btcMinusStable: zod.number().describe("BTC.D - Stable.D"),
+    largecapDivOthers: zod.number().describe("(BTC.D+ETH.D) \/ OTHERS.D"),
+    totalDivStable: zod.number().describe("TOTALES.D \/ Stable.D"),
+    usdtDivUsdc: zod.number().describe("USDT.D \/ USDC.D"),
+  }),
+  regime: zod.enum([
+    "RISK_OFF",
+    "BTC_DOMINANT",
+    "ETH_SEASON",
+    "ALT_SEASON",
+    "NEUTRAL",
+  ]),
+  regimeScore: zod.number(),
+  latestRotation: zod.string().nullish(),
+  latestRotScore: zod.number().nullish(),
+  lastUpdated: zod.coerce.date(),
 });
 
 /**

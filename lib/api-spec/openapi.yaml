@@ -14,6 +14,8 @@ tags:
     description: Trading signal operations
   - name: bot
     description: Trading bot operations
+  - name: market
+    description: Market status and spread analysis
 paths:
   /healthz:
     get:
@@ -289,6 +291,19 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Trade"
+
+  /market/status:
+    get:
+      operationId: getMarketStatus
+      tags: [market]
+      summary: Get live market regime, dominance spreads, and rotation state
+      responses:
+        "200":
+          description: Market status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketStatus"
 
   /signals/{id}:
     get:
@@ -619,6 +634,14 @@ components:
           type: boolean
         longOnly:
           type: boolean
+        tradingMode:
+          type: string
+          description: "all | scalp | intraday | swing | position"
+        compoundingEnabled:
+          type: boolean
+        compoundBalance:
+          type: number
+          nullable: true
         positionSizeUsdt:
           type: number
         minConfW:
@@ -659,6 +682,8 @@ components:
         - maxOpenTrades
         - cooldownMinutes
         - longOnly
+        - tradingMode
+        - compoundingEnabled
         - slEnabled
         - tp1Enabled
         - tp2Enabled
@@ -677,6 +702,13 @@ components:
           type: boolean
         longOnly:
           type: boolean
+        tradingMode:
+          type: string
+        compoundingEnabled:
+          type: boolean
+        compoundBalance:
+          type: number
+          nullable: true
         positionSizeUsdt:
           type: number
         minConfW:
@@ -892,3 +924,75 @@ components:
       required:
         - trades
         - total
+
+    MarketSpreads:
+      type: object
+      properties:
+        btcDivStable:
+          type: number
+          description: "BTC.D / (USDT.D+USDC.D)"
+        stableDivBtc:
+          type: number
+          description: "(USDT.D+USDC.D) / BTC.D"
+        btcMinusStable:
+          type: number
+          description: "BTC.D - Stable.D"
+        largecapDivOthers:
+          type: number
+          description: "(BTC.D+ETH.D) / OTHERS.D"
+        totalDivStable:
+          type: number
+          description: "TOTALES.D / Stable.D"
+        usdtDivUsdc:
+          type: number
+          description: "USDT.D / USDC.D"
+      required:
+        - btcDivStable
+        - stableDivBtc
+        - btcMinusStable
+        - largecapDivOthers
+        - totalDivStable
+        - usdtDivUsdc
+
+    MarketStatus:
+      type: object
+      properties:
+        btcDominance:
+          type: number
+        ethDominance:
+          type: number
+        stableDominance:
+          type: number
+        othersDominance:
+          type: number
+        totalMarketCapUsd:
+          type: number
+          nullable: true
+        marketCapChange24h:
+          type: number
+          nullable: true
+        spreads:
+          $ref: "#/components/schemas/MarketSpreads"
+        regime:
+          type: string
+          enum: [RISK_OFF, BTC_DOMINANT, ETH_SEASON, ALT_SEASON, NEUTRAL]
+        regimeScore:
+          type: number
+        latestRotation:
+          type: string
+          nullable: true
+        latestRotScore:
+          type: number
+          nullable: true
+        lastUpdated:
+          type: string
+          format: date-time
+      required:
+        - btcDominance
+        - ethDominance
+        - stableDominance
+        - othersDominance
+        - spreads
+        - regime
+        - regimeScore
+        - lastUpdated

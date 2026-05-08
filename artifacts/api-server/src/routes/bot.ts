@@ -18,7 +18,9 @@ router.get("/config", async (req, res): Promise<void> => {
 router.put("/config", async (req, res): Promise<void> => {
   const body = req.body as Record<string, unknown>;
   const allowed = [
-    "enabled", "paperMode", "longOnly", "positionSizeUsdt", "minConfW", "minGrade",
+    "enabled", "paperMode", "longOnly",
+    "tradingMode", "compoundingEnabled", "compoundBalance",
+    "positionSizeUsdt", "minConfW", "minGrade",
     "allowedSymbols", "maxOpenTrades", "cooldownMinutes",
     "slEnabled", "tp1Enabled", "tp2Enabled", "tp3Enabled",
     "tp1Pct", "tp2Pct", "tp3Pct",
@@ -27,6 +29,14 @@ router.put("/config", async (req, res): Promise<void> => {
   for (const key of allowed) {
     if (key in body && body[key] !== undefined) {
       update[key] = body[key];
+    }
+  }
+
+  // When enabling compounding for the first time, seed compoundBalance from positionSizeUsdt
+  if (body["compoundingEnabled"] === true) {
+    const [existing] = await db.select().from(botConfigTable).limit(1);
+    if (existing && existing.compoundBalance == null) {
+      update["compoundBalance"] = existing.positionSizeUsdt;
     }
   }
 
@@ -40,7 +50,7 @@ router.put("/config", async (req, res): Promise<void> => {
       .where(eq(botConfigTable.id, existing.id))
       .returning();
   }
-  req.log.info({ enabled: config.enabled, paperMode: config.paperMode }, "Bot config updated");
+  req.log.info({ enabled: config.enabled, paperMode: config.paperMode, tradingMode: config.tradingMode }, "Bot config updated");
   res.json(config);
 });
 
@@ -84,7 +94,6 @@ router.get("/performance", async (req, res): Promise<void> => {
 
   const closedWithPnl = closed.filter((t) => t.pnl != null);
   const wins = closedWithPnl.filter((t) => (t.pnl ?? 0) > 0);
-  const losses = closedWithPnl.filter((t) => (t.pnl ?? 0) <= 0);
 
   const longClosed = closedWithPnl.filter((t) => t.side === "buy");
   const shortClosed = closedWithPnl.filter((t) => t.side === "sell");
@@ -132,7 +141,6 @@ router.post("/test-signal", async (req, res): Promise<void> => {
     req.log.warn({ symbol, err }, "Test signal: could not fetch live price, using 0");
   }
 
-  // Build realistic SL/TP levels around current price
   const slPct = dir === "LONG" ? 0.97 : 1.03;
   const tp1Pct = dir === "LONG" ? 1.02 : 0.98;
   const tp2Pct = dir === "LONG" ? 1.04 : 0.96;
@@ -166,7 +174,6 @@ router.post("/test-signal", async (req, res): Promise<void> => {
   req.log.info({ id: signal.id, symbol, dir, price }, "Test signal created");
   res.status(201).json(signal);
 
-  // Fire executor asynchronously
   executeSignal(signal).catch((err: unknown) => {
     req.log.error({ err, signalId: signal.id }, "Test signal executor error");
   });
@@ -204,7 +211,7 @@ router.get("/equity-curve", async (req, res): Promise<void> => {
   res.json({ points, totalPnl: cumulative, totalReturnPct });
 });
 
-// IMPORTANT: must come before /trades/:id so Express doesn't eat "by-signal" as an id param
+// IMPORTANT: must come before /trades/:id
 router.get("/trades/by-signal/:signalId", async (req, res): Promise<void> => {
   const signalId = parseInt(req.params.signalId);
   const [trade] = await db
