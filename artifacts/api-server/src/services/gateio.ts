@@ -1,17 +1,18 @@
 import crypto from "crypto";
 import { logger } from "../lib/logger";
 
-const BASE_URL = "https://api.gateio.ws/api/v4";
+const BASE = "https://api.gateio.ws";
+const API_PATH_PREFIX = "/api/v4";
 
 function sign(
   method: string,
-  path: string,
+  fullPath: string,
   query: string,
   body: string,
   timestamp: string
 ): string {
   const bodyHash = crypto.createHash("sha512").update(body).digest("hex");
-  const payload = `${method}\n${path}\n${query}\n${bodyHash}\n${timestamp}`;
+  const payload = `${method}\n${fullPath}\n${query}\n${bodyHash}\n${timestamp}`;
   const secret = process.env.GATEIO_API_SECRET ?? "";
   return crypto.createHmac("sha512", secret).update(payload).digest("hex");
 }
@@ -28,9 +29,11 @@ async function request<T>(
   const query = params ? new URLSearchParams(params).toString() : "";
   const bodyStr = body ? JSON.stringify(body) : "";
 
-  const signature = sign(method.toUpperCase(), path, query, bodyStr, timestamp);
+  // Gate.io signature requires the full path including /api/v4 prefix
+  const fullPath = `${API_PATH_PREFIX}${path}`;
+  const signature = sign(method.toUpperCase(), fullPath, query, bodyStr, timestamp);
 
-  const url = `${BASE_URL}${path}${query ? "?" + query : ""}`;
+  const url = `${BASE}${fullPath}${query ? "?" + query : ""}`;
 
   const res = await fetch(url, {
     method,
@@ -67,6 +70,29 @@ export async function getUsdtBalance(): Promise<number> {
   const accounts = await getSpotAccounts();
   const usdt = accounts.find((a) => a.currency === "USDT");
   return usdt ? parseFloat(usdt.available) : 0;
+}
+
+export interface SpotTicker {
+  currency_pair: string;
+  last: string;
+  high_24h: string;
+  low_24h: string;
+  change_percentage: string;
+}
+
+export async function getSpotTicker(currencyPair: string): Promise<SpotTicker> {
+  const [ticker] = await request<SpotTicker[]>("GET", "/spot/tickers", {
+    currency_pair: currencyPair,
+  });
+  if (!ticker) throw new Error(`No ticker data for ${currencyPair}`);
+  return ticker;
+}
+
+export async function getLivePrice(currencyPair: string): Promise<number> {
+  const ticker = await getSpotTicker(currencyPair);
+  const price = parseFloat(ticker.last);
+  if (!price || isNaN(price)) throw new Error(`Invalid price for ${currencyPair}`);
+  return price;
 }
 
 export interface SpotOrder {
