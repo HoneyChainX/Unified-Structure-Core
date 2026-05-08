@@ -1,7 +1,9 @@
 import { Router } from "express";
-import { db, botConfigTable, tradesTable } from "@workspace/db";
-import { eq, desc, count, and, sql } from "drizzle-orm";
-import { getUsdtBalance, cancelPriceTriggeredOrder } from "../services/gateio";
+import { db, botConfigTable, tradesTable, signalsTable } from "@workspace/db";
+import { eq, desc, count, and, inArray, sql } from "drizzle-orm";
+import { getUsdtBalance, cancelPriceTriggeredOrder, getLivePrice, toGateSymbol } from "../services/gateio";
+import { lastSyncAt } from "../services/sync";
+import { executeSignal } from "../services/executor";
 
 const router = Router();
 
@@ -17,7 +19,8 @@ router.put("/config", async (req, res): Promise<void> => {
   const body = req.body as Record<string, unknown>;
   const allowed = [
     "enabled", "paperMode", "positionSizeUsdt", "minConfW", "minGrade",
-    "allowedSymbols", "slEnabled", "tp1Enabled", "tp2Enabled", "tp3Enabled",
+    "allowedSymbols", "maxOpenTrades", "cooldownMinutes",
+    "slEnabled", "tp1Enabled", "tp2Enabled", "tp3Enabled",
     "tp1Pct", "tp2Pct", "tp3Pct",
   ];
   const update: Record<string, unknown> = { updatedAt: new Date() };
@@ -48,7 +51,7 @@ router.get("/status", async (req, res): Promise<void> => {
   const [openRow] = await db
     .select({ c: count() })
     .from(tradesTable)
-    .where(eq(tradesTable.status, "open"));
+    .where(inArray(tradesTable.status, ["open", "paper"]));
 
   const [totalRow] = await db.select({ c: count() }).from(tradesTable);
 
@@ -68,6 +71,104 @@ router.get("/status", async (req, res): Promise<void> => {
     openTrades: openRow?.c ?? 0,
     totalTrades: totalRow?.c ?? 0,
     apiConfigured,
+    lastSyncAt: lastSyncAt?.toISOString() ?? null,
+  });
+});
+
+router.get("/performance", async (req, res): Promise<void> => {
+  const trades = await db.select().from(tradesTable);
+
+  const closed = trades.filter((t) => t.status === "closed");
+  const open = trades.filter((t) => t.status === "open" || t.status === "paper");
+  const paper = trades.filter((t) => t.paperMode);
+
+  const closedWithPnl = closed.filter((t) => t.pnl != null);
+  const wins = closedWithPnl.filter((t) => (t.pnl ?? 0) > 0);
+  const losses = closedWithPnl.filter((t) => (t.pnl ?? 0) <= 0);
+
+  const longClosed = closedWithPnl.filter((t) => t.side === "buy");
+  const shortClosed = closedWithPnl.filter((t) => t.side === "sell");
+
+  const totalPnl = closedWithPnl.reduce((sum, t) => sum + (t.pnl ?? 0), 0);
+  const pnlValues = closedWithPnl.map((t) => t.pnl ?? 0);
+
+  res.json({
+    totalTrades: trades.length,
+    closedTrades: closed.length,
+    openTrades: open.length,
+    paperTrades: paper.length,
+    winRate: closedWithPnl.length > 0 ? wins.length / closedWithPnl.length : null,
+    totalPnl,
+    avgPnl: closedWithPnl.length > 0 ? totalPnl / closedWithPnl.length : null,
+    bestTrade: pnlValues.length > 0 ? Math.max(...pnlValues) : null,
+    worstTrade: pnlValues.length > 0 ? Math.min(...pnlValues) : null,
+    longWins: longClosed.filter((t) => (t.pnl ?? 0) > 0).length,
+    longLosses: longClosed.filter((t) => (t.pnl ?? 0) <= 0).length,
+    shortWins: shortClosed.filter((t) => (t.pnl ?? 0) > 0).length,
+    shortLosses: shortClosed.filter((t) => (t.pnl ?? 0) <= 0).length,
+  });
+});
+
+router.post("/test-signal", async (req, res): Promise<void> => {
+  const body = req.body as {
+    symbol?: string;
+    dir?: string;
+    tf?: string;
+    grade?: string;
+    confW?: number;
+  };
+
+  const symbol = (body.symbol ?? "BTCUSDT").toUpperCase();
+  const dir = (body.dir ?? "LONG") as "LONG" | "SHORT";
+  const tf = body.tf ?? "4H";
+  const grade = body.grade ?? "A+ Setup";
+  const confW = body.confW ?? 75;
+
+  const gateSymbol = toGateSymbol(symbol);
+  let price = 0;
+  try {
+    price = await getLivePrice(gateSymbol);
+  } catch (err) {
+    req.log.warn({ symbol, err }, "Test signal: could not fetch live price, using 0");
+  }
+
+  // Build realistic SL/TP levels around current price
+  const slPct = dir === "LONG" ? 0.97 : 1.03;
+  const tp1Pct = dir === "LONG" ? 1.02 : 0.98;
+  const tp2Pct = dir === "LONG" ? 1.04 : 0.96;
+  const tp3Pct = dir === "LONG" ? 1.07 : 0.93;
+
+  const sl = price > 0 ? +(price * slPct).toFixed(2) : null;
+  const tp1 = price > 0 ? +(price * tp1Pct).toFixed(2) : null;
+  const tp2 = price > 0 ? +(price * tp2Pct).toFixed(2) : null;
+  const tp3 = price > 0 ? +(price * tp3Pct).toFixed(2) : null;
+
+  const [signal] = await db.insert(signalsTable).values({
+    symbol,
+    tf,
+    dir,
+    mode: "test",
+    grade,
+    confW,
+    conf: Math.round(confW * 0.95),
+    riskTier: confW >= 70 ? "HIGH_CONF" : confW >= 50 ? "MID_CONF" : "LOW_CONF",
+    entryRef: price > 0 ? price : null,
+    sl,
+    tp1,
+    tp2,
+    tp3,
+    rr1: price > 0 && sl ? parseFloat(((tp1! - price) / (price - sl!)).toFixed(2)) : null,
+    triggered: true,
+    blockReason: "OK",
+    rawPayload: { _test: true, symbol, dir, tf, grade, confW, livePrice: price },
+  }).returning();
+
+  req.log.info({ id: signal.id, symbol, dir, price }, "Test signal created");
+  res.status(201).json(signal);
+
+  // Fire executor asynchronously
+  executeSignal(signal).catch((err: unknown) => {
+    req.log.error({ err, signalId: signal.id }, "Test signal executor error");
   });
 });
 
@@ -124,7 +225,7 @@ router.delete("/trades/:id", async (req, res): Promise<void> => {
   }
 
   const [updated] = await db.update(tradesTable)
-    .set({ status: "cancelled", closedAt: new Date() })
+    .set({ status: "cancelled", closeReason: "manual", closedAt: new Date() })
     .where(eq(tradesTable.id, id))
     .returning();
 

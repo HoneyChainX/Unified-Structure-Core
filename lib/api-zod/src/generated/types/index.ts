@@ -8,6 +8,7 @@
 
 export * from "./botConfig";
 export * from "./botConfigPatch";
+export * from "./botPerformance";
 export * from "./botStatus";
 export * from "./healthStatus";
 export * from "./listSignalsDir";
@@ -20,6 +21,8 @@ export * from "./signalRawPayload";
 export * from "./signalStats";
 export * from "./signalStatsGradeBreakdownItem";
 export * from "./signalStatsSymbolBreakdownItem";
+export * from "./testSignalRequest";
+export * from "./testSignalRequestDir";
 export * from "./trade";
 export * from "./tradeList";
 export * from "./webhookPayload";

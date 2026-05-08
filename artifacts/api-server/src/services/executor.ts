@@ -1,5 +1,5 @@
 import { db, botConfigTable, tradesTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, inArray, and, gte } from "drizzle-orm";
 import type { Signal } from "@workspace/db";
 import {
   getUsdtBalance,
@@ -64,12 +64,63 @@ export async function executeSignal(signal: Signal): Promise<void> {
     return;
   }
 
+  // Max open trades guard
+  const [openCountRow] = await db
+    .select({ c: db.$count(tradesTable, inArray(tradesTable.status, ["open", "paper"])) })
+    .from(tradesTable)
+    .where(inArray(tradesTable.status, ["open", "paper"]));
+  const openCount = Number(openCountRow?.c ?? 0);
+  if (openCount >= config.maxOpenTrades) {
+    logger.info({ signalId: signal.id, openCount, maxOpenTrades: config.maxOpenTrades }, "Max open trades reached, skipping");
+    return;
+  }
+
+  // Duplicate symbol guard — skip if already holding a position in this symbol
+  const [existingTrade] = await db
+    .select({ id: tradesTable.id })
+    .from(tradesTable)
+    .where(
+      and(
+        eq(tradesTable.symbol, signal.symbol.toUpperCase()),
+        inArray(tradesTable.status, ["open", "paper"])
+      )
+    )
+    .limit(1);
+
+  if (existingTrade) {
+    logger.info({ signalId: signal.id, symbol: signal.symbol, existingTradeId: existingTrade.id }, "Duplicate position guard: already in trade for this symbol, skipping");
+    return;
+  }
+
+  // Cooldown guard — skip if last trade for this symbol was within cooldownMinutes
+  if (config.cooldownMinutes > 0) {
+    const cutoff = new Date(Date.now() - config.cooldownMinutes * 60_000);
+    const [recentTrade] = await db
+      .select({ id: tradesTable.id, createdAt: tradesTable.createdAt })
+      .from(tradesTable)
+      .where(
+        and(
+          eq(tradesTable.symbol, signal.symbol.toUpperCase()),
+          gte(tradesTable.createdAt, cutoff)
+        )
+      )
+      .limit(1);
+
+    if (recentTrade) {
+      logger.info(
+        { signalId: signal.id, symbol: signal.symbol, cooldownMinutes: config.cooldownMinutes },
+        "Cooldown active, skipping"
+      );
+      return;
+    }
+  }
+
   const gateSymbol = toGateSymbol(signal.symbol);
   const side = signal.dir === "LONG" ? "buy" : "sell";
 
   const [trade] = await db.insert(tradesTable).values({
     signalId: signal.id,
-    symbol: signal.symbol,
+    symbol: signal.symbol.toUpperCase(),
     gateSymbol,
     side,
     status: "pending",
@@ -97,7 +148,9 @@ export async function executeSignal(signal: Signal): Promise<void> {
     await db.update(tradesTable).set({
       status: "paper",
       entryPrice,
+      livePrice: entryPrice,
       quantity,
+      pnl: 0,
     }).where(eq(tradesTable.id, trade.id));
 
     logger.info(
@@ -116,8 +169,7 @@ export async function executeSignal(signal: Signal): Promise<void> {
       throw new Error(`Insufficient balance: ${usdtBalance.toFixed(2)} USDT available, ${config.positionSizeUsdt} USDT needed`);
     }
 
-    // Fetch live price to calculate base quantity for SELL orders
-    // (Gate.io market sell requires base currency amount, not USDT)
+    // For market sell: need base currency amount = USDT / current price
     let livePrice: number | undefined;
     if (side === "sell") {
       livePrice = await getLivePrice(gateSymbol).catch((err) => {
@@ -125,8 +177,7 @@ export async function executeSignal(signal: Signal): Promise<void> {
       });
     }
 
-    // For market buy: amount = USDT to spend (Gate.io treats as quote currency)
-    // For market sell: amount = base currency quantity (Gate.io treats as base currency)
+    // market buy: amount = USDT (quote currency); market sell: amount = base currency qty
     const orderAmount =
       side === "buy"
         ? config.positionSizeUsdt.toString()
@@ -139,15 +190,16 @@ export async function executeSignal(signal: Signal): Promise<void> {
       type: "market",
     });
 
-    // filled_amount = base currency (BTC/ETH/etc) received (buy) or sold (sell)
     const entryPrice = parseFloat(entryOrder.avg_deal_price || entryOrder.price);
     const quantity = parseFloat(entryOrder.filled_amount || entryOrder.amount);
 
     await db.update(tradesTable).set({
       entryOrderId: entryOrder.id,
       entryPrice,
+      livePrice: entryPrice,
       quantity,
       status: "open",
+      pnl: 0,
     }).where(eq(tradesTable.id, trade.id));
 
     logger.info({ tradeId: trade.id, entryOrderId: entryOrder.id, entryPrice, quantity }, "Entry order placed");
@@ -155,7 +207,6 @@ export async function executeSignal(signal: Signal): Promise<void> {
     const tpOrders: { tp1OrderId?: string; tp2OrderId?: string; tp3OrderId?: string; slOrderId?: string } = {};
 
     if (signal.dir === "LONG") {
-      // SL: sell if price drops to SL level
       if (config.slEnabled && signal.sl) {
         try {
           const slOrder = await placePriceTriggeredOrder({
@@ -173,7 +224,6 @@ export async function executeSignal(signal: Signal): Promise<void> {
         }
       }
 
-      // TPs: sell portions as price rises to TP levels
       const tps = [
         { enabled: config.tp1Enabled, price: signal.tp1, pct: config.tp1Pct, key: "tp1OrderId" as const },
         { enabled: config.tp2Enabled, price: signal.tp2, pct: config.tp2Pct, key: "tp2OrderId" as const },
@@ -199,8 +249,7 @@ export async function executeSignal(signal: Signal): Promise<void> {
         }
       }
     } else {
-      // SHORT (spot sell — closing a long or reducing exposure)
-      // SL: buy back if price RISES to SL (stop the bleeding)
+      // SHORT: SL = buy back if price rises, TP = buy back as price falls
       if (config.slEnabled && signal.sl) {
         try {
           const slOrder = await placePriceTriggeredOrder({
@@ -218,7 +267,6 @@ export async function executeSignal(signal: Signal): Promise<void> {
         }
       }
 
-      // TPs: buy back at lower prices as position profits
       const tps = [
         { enabled: config.tp1Enabled, price: signal.tp1, pct: config.tp1Pct, key: "tp1OrderId" as const },
         { enabled: config.tp2Enabled, price: signal.tp2, pct: config.tp2Pct, key: "tp2OrderId" as const },

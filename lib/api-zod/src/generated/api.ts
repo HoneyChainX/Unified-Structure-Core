@@ -179,6 +179,8 @@ export const GetBotConfigResponse = zod.object({
   minConfW: zod.number(),
   minGrade: zod.string(),
   allowedSymbols: zod.string(),
+  maxOpenTrades: zod.number(),
+  cooldownMinutes: zod.number(),
   slEnabled: zod.boolean(),
   tp1Enabled: zod.boolean(),
   tp2Enabled: zod.boolean(),
@@ -199,6 +201,8 @@ export const UpdateBotConfigBody = zod.object({
   minConfW: zod.number().optional(),
   minGrade: zod.string().optional(),
   allowedSymbols: zod.string().optional(),
+  maxOpenTrades: zod.number().optional(),
+  cooldownMinutes: zod.number().optional(),
   slEnabled: zod.boolean().optional(),
   tp1Enabled: zod.boolean().optional(),
   tp2Enabled: zod.boolean().optional(),
@@ -216,6 +220,8 @@ export const UpdateBotConfigResponse = zod.object({
   minConfW: zod.number(),
   minGrade: zod.string(),
   allowedSymbols: zod.string(),
+  maxOpenTrades: zod.number(),
+  cooldownMinutes: zod.number(),
   slEnabled: zod.boolean(),
   tp1Enabled: zod.boolean(),
   tp2Enabled: zod.boolean(),
@@ -236,6 +242,37 @@ export const GetBotStatusResponse = zod.object({
   openTrades: zod.number(),
   totalTrades: zod.number(),
   apiConfigured: zod.boolean(),
+  lastSyncAt: zod.coerce.date().nullish(),
+});
+
+/**
+ * @summary Get bot performance statistics
+ */
+export const GetBotPerformanceResponse = zod.object({
+  totalTrades: zod.number(),
+  closedTrades: zod.number(),
+  openTrades: zod.number(),
+  paperTrades: zod.number(),
+  winRate: zod.number().nullish(),
+  totalPnl: zod.number(),
+  avgPnl: zod.number().nullish(),
+  bestTrade: zod.number().nullish(),
+  worstTrade: zod.number().nullish(),
+  longWins: zod.number(),
+  longLosses: zod.number(),
+  shortWins: zod.number(),
+  shortLosses: zod.number(),
+});
+
+/**
+ * @summary Fire a simulated test signal using live market prices
+ */
+export const SendTestSignalBody = zod.object({
+  symbol: zod.string().describe("Trading pair e.g. BTCUSDT"),
+  dir: zod.enum(["LONG", "SHORT"]),
+  tf: zod.string().optional().describe("Timeframe e.g. 4H"),
+  grade: zod.string().optional(),
+  confW: zod.number().optional(),
 });
 
 /**
@@ -262,6 +299,7 @@ export const ListTradesResponse = zod.object({
       positionSizeUsdt: zod.number().nullish(),
       quantity: zod.number().nullish(),
       entryPrice: zod.number().nullish(),
+      livePrice: zod.number().nullish(),
       entryOrderId: zod.string().nullish(),
       slOrderId: zod.string().nullish(),
       tp1OrderId: zod.string().nullish(),
@@ -271,6 +309,8 @@ export const ListTradesResponse = zod.object({
       tp1Price: zod.number().nullish(),
       tp2Price: zod.number().nullish(),
       tp3Price: zod.number().nullish(),
+      closePrice: zod.number().nullish(),
+      closeReason: zod.string().nullish(),
       pnl: zod.number().nullish(),
       errorMessage: zod.string().nullish(),
       paperMode: zod.boolean(),
@@ -298,6 +338,7 @@ export const GetTradeResponse = zod.object({
   positionSizeUsdt: zod.number().nullish(),
   quantity: zod.number().nullish(),
   entryPrice: zod.number().nullish(),
+  livePrice: zod.number().nullish(),
   entryOrderId: zod.string().nullish(),
   slOrderId: zod.string().nullish(),
   tp1OrderId: zod.string().nullish(),
@@ -307,6 +348,8 @@ export const GetTradeResponse = zod.object({
   tp1Price: zod.number().nullish(),
   tp2Price: zod.number().nullish(),
   tp3Price: zod.number().nullish(),
+  closePrice: zod.number().nullish(),
+  closeReason: zod.string().nullish(),
   pnl: zod.number().nullish(),
   errorMessage: zod.string().nullish(),
   paperMode: zod.boolean(),
@@ -331,6 +374,7 @@ export const CancelTradeResponse = zod.object({
   positionSizeUsdt: zod.number().nullish(),
   quantity: zod.number().nullish(),
   entryPrice: zod.number().nullish(),
+  livePrice: zod.number().nullish(),
   entryOrderId: zod.string().nullish(),
   slOrderId: zod.string().nullish(),
   tp1OrderId: zod.string().nullish(),
@@ -340,6 +384,8 @@ export const CancelTradeResponse = zod.object({
   tp1Price: zod.number().nullish(),
   tp2Price: zod.number().nullish(),
   tp3Price: zod.number().nullish(),
+  closePrice: zod.number().nullish(),
+  closeReason: zod.string().nullish(),
   pnl: zod.number().nullish(),
   errorMessage: zod.string().nullish(),
   paperMode: zod.boolean(),

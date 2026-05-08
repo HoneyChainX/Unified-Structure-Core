@@ -68,6 +68,16 @@ The bot fires automatically after each webhook signal is stored. Execution logic
 
 Required secrets for live trading: `GATEIO_API_KEY`, `GATEIO_API_SECRET`
 
+## Bot Features
+
+- **Keep-alive trade sync** — background loop every 30s: updates live P&L for open trades, detects SL/TP fills on Gate.io, marks trades closed automatically
+- **Duplicate position guard** — skips a new signal if a trade for that symbol is already open
+- **Max open trades** — configurable cap on concurrent positions (default: 3)
+- **Cooldown period** — minimum minutes between trades on the same symbol (default: 0 = off)
+- **Live P&L** — paper and live trades show unrealized P&L computed from current market price
+- **Performance stats** — win rate, total/avg/best/worst P&L across closed trades
+- **Test Signal button** — fire a simulated signal with live prices directly from the bot page
+
 ## Where things live (extended)
 
 - `lib/db/src/schema/bot-config.ts` — Bot configuration table
@@ -76,6 +86,7 @@ Required secrets for live trading: `GATEIO_API_KEY`, `GATEIO_API_SECRET`
 - `artifacts/api-server/src/services/executor.ts` — Signal-to-trade execution logic
 - `artifacts/api-server/src/routes/bot.ts` — Bot config + trade history API routes
 - `artifacts/dashboard/src/pages/bot.tsx` — Bot control page
+- `artifacts/api-server/src/services/sync.ts` — Keep-alive trade sync loop (30s interval)
 
 ## User preferences
 

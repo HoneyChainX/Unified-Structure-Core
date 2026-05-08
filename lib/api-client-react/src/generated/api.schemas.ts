@@ -139,6 +139,8 @@ export interface BotConfig {
   minConfW: number;
   minGrade: string;
   allowedSymbols: string;
+  maxOpenTrades: number;
+  cooldownMinutes: number;
   slEnabled: boolean;
   tp1Enabled: boolean;
   tp2Enabled: boolean;
@@ -156,6 +158,8 @@ export interface BotConfigPatch {
   minConfW?: number;
   minGrade?: string;
   allowedSymbols?: string;
+  maxOpenTrades?: number;
+  cooldownMinutes?: number;
   slEnabled?: boolean;
   tp1Enabled?: boolean;
   tp2Enabled?: boolean;
@@ -172,6 +176,41 @@ export interface BotStatus {
   openTrades: number;
   totalTrades: number;
   apiConfigured: boolean;
+  lastSyncAt?: string | null;
+}
+
+export interface BotPerformance {
+  totalTrades: number;
+  closedTrades: number;
+  openTrades: number;
+  paperTrades: number;
+  winRate?: number | null;
+  totalPnl: number;
+  avgPnl?: number | null;
+  bestTrade?: number | null;
+  worstTrade?: number | null;
+  longWins: number;
+  longLosses: number;
+  shortWins: number;
+  shortLosses: number;
+}
+
+export type TestSignalRequestDir =
+  (typeof TestSignalRequestDir)[keyof typeof TestSignalRequestDir];
+
+export const TestSignalRequestDir = {
+  LONG: "LONG",
+  SHORT: "SHORT",
+} as const;
+
+export interface TestSignalRequest {
+  /** Trading pair e.g. BTCUSDT */
+  symbol: string;
+  dir: TestSignalRequestDir;
+  /** Timeframe e.g. 4H */
+  tf?: string;
+  grade?: string;
+  confW?: number;
 }
 
 export interface Trade {
@@ -184,6 +223,7 @@ export interface Trade {
   positionSizeUsdt?: number | null;
   quantity?: number | null;
   entryPrice?: number | null;
+  livePrice?: number | null;
   entryOrderId?: string | null;
   slOrderId?: string | null;
   tp1OrderId?: string | null;
@@ -193,6 +233,8 @@ export interface Trade {
   tp1Price?: number | null;
   tp2Price?: number | null;
   tp3Price?: number | null;
+  closePrice?: number | null;
+  closeReason?: string | null;
   pnl?: number | null;
   errorMessage?: string | null;
   paperMode: boolean;

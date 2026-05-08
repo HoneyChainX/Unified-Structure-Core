@@ -1,4 +1,4 @@
-import { pgTable, serial, boolean, real, text, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, boolean, real, integer, text, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -12,6 +12,9 @@ export const botConfigTable = pgTable("bot_config", {
   minGrade: text("min_grade").notNull().default("Strong Setup"),
 
   allowedSymbols: text("allowed_symbols").notNull().default(""),
+
+  maxOpenTrades: integer("max_open_trades").notNull().default(3),
+  cooldownMinutes: integer("cooldown_minutes").notNull().default(0),
 
   slEnabled: boolean("sl_enabled").notNull().default(true),
   tp1Enabled: boolean("tp1_enabled").notNull().default(true),

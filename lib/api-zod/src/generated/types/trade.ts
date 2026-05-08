@@ -16,6 +16,7 @@ export interface Trade {
   positionSizeUsdt?: number | null;
   quantity?: number | null;
   entryPrice?: number | null;
+  livePrice?: number | null;
   entryOrderId?: string | null;
   slOrderId?: string | null;
   tp1OrderId?: string | null;
@@ -25,6 +26,8 @@ export interface Trade {
   tp1Price?: number | null;
   tp2Price?: number | null;
   tp3Price?: number | null;
+  closePrice?: number | null;
+  closeReason?: string | null;
   pnl?: number | null;
   errorMessage?: string | null;
   paperMode: boolean;

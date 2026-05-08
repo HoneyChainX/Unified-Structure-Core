@@ -15,6 +15,7 @@ export const tradesTable = pgTable("trades", {
   positionSizeUsdt: real("position_size_usdt"),
   quantity: real("quantity"),
   entryPrice: real("entry_price"),
+  livePrice: real("live_price"),
 
   entryOrderId: text("entry_order_id"),
   slOrderId: text("sl_order_id"),
@@ -26,6 +27,9 @@ export const tradesTable = pgTable("trades", {
   tp1Price: real("tp1_price"),
   tp2Price: real("tp2_price"),
   tp3Price: real("tp3_price"),
+
+  closePrice: real("close_price"),
+  closeReason: text("close_reason"),
 
   pnl: real("pnl"),
   errorMessage: text("error_message"),

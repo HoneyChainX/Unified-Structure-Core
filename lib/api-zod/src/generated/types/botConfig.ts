@@ -14,6 +14,8 @@ export interface BotConfig {
   minConfW: number;
   minGrade: string;
   allowedSymbols: string;
+  maxOpenTrades: number;
+  cooldownMinutes: number;
   slEnabled: boolean;
   tp1Enabled: boolean;
   tp2Enabled: boolean;

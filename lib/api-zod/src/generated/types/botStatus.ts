@@ -13,4 +13,5 @@ export interface BotStatus {
   openTrades: number;
   totalTrades: number;
   apiConfigured: boolean;
+  lastSyncAt?: Date | null;
 }

@@ -5,9 +5,12 @@ import {
   useGetBotStatus,
   useListTrades,
   useCancelTrade,
+  useGetBotPerformance,
+  useSendTestSignal,
   getGetBotConfigQueryKey,
   getGetBotStatusQueryKey,
   getListTradesQueryKey,
+  getGetBotPerformanceQueryKey,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -24,12 +27,28 @@ import {
   TrendingDown,
   Clock,
   Trash2,
+  BarChart2,
+  RefreshCw,
+  PlayCircle,
+  Timer,
+  Layers,
 } from "lucide-react";
 import { Link } from "wouter";
 
 function fmt(v: number | null | undefined, d = 4) {
   if (v == null) return "—";
   return v.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+
+function fmtPnl(v: number | null | undefined) {
+  if (v == null) return null;
+  const sign = v >= 0 ? "+" : "";
+  return `${sign}${v.toFixed(4)} USDT`;
+}
+
+function fmtPct(v: number | null | undefined) {
+  if (v == null) return "—";
+  return `${(v * 100).toFixed(1)}%`;
 }
 
 function timeSince(dateStr: string) {
@@ -46,6 +65,7 @@ function StatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
     open: "border-blue-500/40 text-blue-400",
     paper: "border-violet-500/40 text-violet-400",
+    closed: "border-green-500/40 text-green-400",
     cancelled: "border-muted-foreground/40 text-muted-foreground",
     error: "border-red-500/40 text-red-400",
     pending: "border-yellow-500/40 text-yellow-400",
@@ -56,6 +76,8 @@ function StatusBadge({ status }: { status: string }) {
     </span>
   );
 }
+
+const TEST_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT"];
 
 export function BotPage() {
   const queryClient = useQueryClient();
@@ -68,12 +90,20 @@ export function BotPage() {
   const { data: tradesData, refetch: refetchTrades } = useListTrades({}, {
     query: { queryKey: getListTradesQueryKey({}), refetchInterval: 15000 }
   });
+  const { data: perf, refetch: refetchPerf } = useGetBotPerformance({
+    query: { queryKey: getGetBotPerformanceQueryKey(), refetchInterval: 30000 }
+  });
+
   const updateMutation = useUpdateBotConfig();
   const cancelMutation = useCancelTrade();
+  const testSignalMutation = useSendTestSignal();
 
   const [form, setForm] = useState<Record<string, unknown> | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [testSymbol, setTestSymbol] = useState("BTCUSDT");
+  const [testDir, setTestDir] = useState<"LONG" | "SHORT">("LONG");
+  const [testing, setTesting] = useState(false);
 
   const current = form ?? config ?? {};
 
@@ -113,6 +143,21 @@ export function BotPage() {
     if (!confirm("Cancel this trade and its SL/TP orders?")) return;
     await cancelMutation.mutateAsync({ id });
     refetchTrades();
+    refetchPerf();
+  }
+
+  async function fireTestSignal() {
+    setTesting(true);
+    try {
+      await testSignalMutation.mutateAsync({ data: { symbol: testSymbol, dir: testDir, tf: "4H", grade: "A+ Setup", confW: 75 } });
+      setTimeout(() => {
+        refetchTrades();
+        refetchPerf();
+        queryClient.invalidateQueries({ queryKey: getGetBotStatusQueryKey() });
+      }, 1500);
+    } finally {
+      setTesting(false);
+    }
   }
 
   if (configLoading) {
@@ -187,6 +232,52 @@ export function BotPage() {
           </div>
         ))}
       </div>
+
+      {/* Last sync indicator */}
+      {status?.lastSyncAt && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <RefreshCw className="w-3 h-3" />
+          Keep-alive sync active — last checked {timeSince(status.lastSyncAt)}
+        </div>
+      )}
+
+      {/* Performance Stats */}
+      {perf && perf.totalTrades > 0 && (
+        <div className="border border-border bg-card">
+          <div className="px-4 py-3 border-b border-border bg-secondary/30 flex items-center gap-2">
+            <BarChart2 className="w-3.5 h-3.5 text-primary" />
+            <span className="text-xs text-muted-foreground tracking-widest font-bold">PERFORMANCE</span>
+          </div>
+          <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div>
+              <div className="text-xs text-muted-foreground tracking-widest mb-1">WIN RATE</div>
+              <div className={`text-xl font-bold font-mono ${perf.winRate != null ? (perf.winRate >= 0.5 ? "text-green-400" : "text-red-400") : ""}`}>
+                {perf.winRate != null ? fmtPct(perf.winRate) : "—"}
+              </div>
+              <div className="text-xs text-muted-foreground mt-0.5">{perf.closedTrades} closed</div>
+            </div>
+            <div>
+              <div className="text-xs text-muted-foreground tracking-widest mb-1">TOTAL P&L</div>
+              <div className={`text-xl font-bold font-mono ${perf.totalPnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+                {perf.totalPnl >= 0 ? "+" : ""}{perf.totalPnl.toFixed(4)}
+              </div>
+              <div className="text-xs text-muted-foreground mt-0.5">USDT</div>
+            </div>
+            <div>
+              <div className="text-xs text-muted-foreground tracking-widest mb-1">BEST TRADE</div>
+              <div className="text-xl font-bold font-mono text-green-400">
+                {perf.bestTrade != null ? `+${perf.bestTrade.toFixed(4)}` : "—"}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-muted-foreground tracking-widest mb-1">WORST TRADE</div>
+              <div className="text-xl font-bold font-mono text-red-400">
+                {perf.worstTrade != null ? perf.worstTrade.toFixed(4) : "—"}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Config Form */}
       <div className="border border-border bg-card">
@@ -276,6 +367,39 @@ export function BotPage() {
             <p className="text-xs text-muted-foreground">Comma-separated. Leave empty to allow all symbols</p>
           </div>
 
+          {/* Max Open Trades */}
+          <div className="space-y-2">
+            <label className="text-xs text-muted-foreground tracking-widest flex items-center gap-2">
+              <Layers className="w-3 h-3" />
+              MAX OPEN TRADES
+            </label>
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={field("maxOpenTrades", 3) as number}
+              onChange={(e) => set("maxOpenTrades", parseInt(e.target.value))}
+              className="w-full bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary"
+            />
+            <p className="text-xs text-muted-foreground">Stop opening new positions beyond this limit</p>
+          </div>
+
+          {/* Cooldown */}
+          <div className="space-y-2">
+            <label className="text-xs text-muted-foreground tracking-widest flex items-center gap-2">
+              <Timer className="w-3 h-3" />
+              COOLDOWN (MINUTES)
+            </label>
+            <input
+              type="number"
+              min={0}
+              value={field("cooldownMinutes", 0) as number}
+              onChange={(e) => set("cooldownMinutes", parseInt(e.target.value))}
+              className="w-full bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary"
+            />
+            <p className="text-xs text-muted-foreground">Min minutes between trades on the same symbol. 0 = disabled</p>
+          </div>
+
           {/* SL/TP toggles */}
           <div className="md:col-span-2 space-y-3">
             <div className="text-xs text-muted-foreground tracking-widest mb-2 flex items-center gap-2">
@@ -338,14 +462,56 @@ export function BotPage() {
         </div>
       </div>
 
+      {/* Test Signal */}
+      <div className="border border-border bg-card">
+        <div className="px-4 py-3 border-b border-border bg-secondary/30 flex items-center gap-2">
+          <PlayCircle className="w-3.5 h-3.5 text-primary" />
+          <span className="text-xs text-muted-foreground tracking-widest font-bold">TEST SIGNAL</span>
+        </div>
+        <div className="p-4 flex flex-wrap items-end gap-3">
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground tracking-widest">SYMBOL</label>
+            <select
+              value={testSymbol}
+              onChange={(e) => setTestSymbol(e.target.value)}
+              className="bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary"
+            >
+              {TEST_SYMBOLS.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground tracking-widest">DIRECTION</label>
+            <select
+              value={testDir}
+              onChange={(e) => setTestDir(e.target.value as "LONG" | "SHORT")}
+              className="bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary"
+            >
+              <option value="LONG">LONG</option>
+              <option value="SHORT">SHORT</option>
+            </select>
+          </div>
+          <button
+            onClick={fireTestSignal}
+            disabled={testing || !isEnabled}
+            className="flex items-center gap-2 px-4 py-2 border border-primary/50 text-primary bg-primary/10 hover:bg-primary/20 text-sm font-bold tracking-widest disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+          >
+            <PlayCircle className="w-4 h-4" />
+            {testing ? "FIRING..." : "FIRE TEST"}
+          </button>
+          {!isEnabled && (
+            <span className="text-xs text-muted-foreground">Enable the bot first to fire test signals</span>
+          )}
+        </div>
+      </div>
+
       {/* Trade History */}
       <div>
         <div className="text-xs text-muted-foreground tracking-widest mb-3">TRADE HISTORY</div>
-        <div className="border border-border overflow-hidden">
+        <div className="border border-border overflow-x-auto">
           <table className="w-full text-xs font-mono">
             <thead>
               <tr className="border-b border-border bg-secondary/50">
-                {["TIME", "SYMBOL", "SIDE", "ENTRY", "SL", "TP1", "SIZE", "STATUS", ""].map(h => (
+                {["TIME", "SYMBOL", "SIDE", "ENTRY", "LIVE", "SL", "TP1", "P&L", "STATUS", ""].map(h => (
                   <th key={h} className="px-3 py-2.5 text-left text-muted-foreground tracking-widest font-normal whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -353,48 +519,64 @@ export function BotPage() {
             <tbody>
               {!tradesData?.trades?.length && (
                 <tr>
-                  <td colSpan={9} className="px-3 py-10 text-center text-muted-foreground">
+                  <td colSpan={10} className="px-3 py-10 text-center text-muted-foreground">
                     No trades yet. Enable the bot to start executing signals.
                   </td>
                 </tr>
               )}
-              {tradesData?.trades?.map(t => (
-                <tr key={t.id} className="border-b border-border/40 hover:bg-secondary/40 transition-colors group">
-                  <td className="px-3 py-2 text-muted-foreground">
-                    <div className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {timeSince(t.createdAt)}
-                    </div>
-                  </td>
-                  <td className={`px-3 py-2 font-bold ${t.side === "buy" ? "text-green-400" : "text-red-400"}`}>{t.symbol}</td>
-                  <td className="px-3 py-2">
-                    <span className={`flex items-center gap-1 font-bold ${t.side === "buy" ? "text-green-400" : "text-red-400"}`}>
-                      {t.side === "buy" ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                      {t.side.toUpperCase()}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-foreground">{fmt(t.entryPrice)}</td>
-                  <td className="px-3 py-2 text-red-400">{fmt(t.slPrice)}</td>
-                  <td className="px-3 py-2 text-green-400">{fmt(t.tp1Price)}</td>
-                  <td className="px-3 py-2 text-muted-foreground">{t.positionSizeUsdt != null ? `${t.positionSizeUsdt}` : "—"} USDT</td>
-                  <td className="px-3 py-2">
-                    <div className="flex items-center gap-2">
-                      <StatusBadge status={t.status} />
-                      {t.paperMode && <span className="text-violet-400 text-xs">paper</span>}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2">
-                    {(t.status === "open" || t.status === "paper") && (
-                      <button
-                        onClick={() => handleCancel(t.id)}
-                        className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 text-muted-foreground transition-all"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {tradesData?.trades?.map(t => {
+                const pnlColor = t.pnl == null ? "" : t.pnl >= 0 ? "text-green-400" : "text-red-400";
+                const isOpen = t.status === "open" || t.status === "paper";
+                return (
+                  <tr key={t.id} className="border-b border-border/40 hover:bg-secondary/40 transition-colors group">
+                    <td className="px-3 py-2 text-muted-foreground">
+                      <div className="flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        {timeSince(t.createdAt)}
+                      </div>
+                    </td>
+                    <td className={`px-3 py-2 font-bold ${t.side === "buy" ? "text-green-400" : "text-red-400"}`}>{t.symbol}</td>
+                    <td className="px-3 py-2">
+                      <span className={`flex items-center gap-1 font-bold ${t.side === "buy" ? "text-green-400" : "text-red-400"}`}>
+                        {t.side === "buy" ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                        {t.side.toUpperCase()}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-foreground">{fmt(t.entryPrice)}</td>
+                    <td className="px-3 py-2 text-muted-foreground">
+                      {isOpen && t.livePrice != null ? (
+                        <span className={t.livePrice !== t.entryPrice ? (t.side === "buy" ? (t.livePrice > (t.entryPrice ?? 0) ? "text-green-400" : "text-red-400") : (t.livePrice < (t.entryPrice ?? 0) ? "text-green-400" : "text-red-400")) : ""}>
+                          {fmt(t.livePrice)}
+                        </span>
+                      ) : t.closePrice != null ? fmt(t.closePrice) : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-red-400">{fmt(t.slPrice)}</td>
+                    <td className="px-3 py-2 text-green-400">{fmt(t.tp1Price)}</td>
+                    <td className={`px-3 py-2 font-bold ${pnlColor}`}>
+                      {t.pnl != null ? fmtPnl(t.pnl) : "—"}
+                      {t.closeReason && t.closeReason !== "manual" && (
+                        <span className="ml-1 text-muted-foreground font-normal">via {t.closeReason.toUpperCase()}</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <StatusBadge status={t.status} />
+                        {t.paperMode && t.status !== "paper" && <span className="text-violet-400 text-xs">paper</span>}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2">
+                      {isOpen && (
+                        <button
+                          onClick={() => handleCancel(t.id)}
+                          className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 text-muted-foreground transition-all"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

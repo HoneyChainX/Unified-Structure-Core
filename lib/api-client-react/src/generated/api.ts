@@ -19,6 +19,7 @@ import type {
 import type {
   BotConfig,
   BotConfigPatch,
+  BotPerformance,
   BotStatus,
   HealthStatus,
   ListSignalsParams,
@@ -26,6 +27,7 @@ import type {
   Signal,
   SignalList,
   SignalStats,
+  TestSignalRequest,
   Trade,
   TradeList,
   WebhookPayload,
@@ -683,6 +685,167 @@ export function useGetBotStatus<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Get bot performance statistics
+ */
+export const getGetBotPerformanceUrl = () => {
+  return `/api/bot/performance`;
+};
+
+export const getBotPerformance = async (
+  options?: RequestInit,
+): Promise<BotPerformance> => {
+  return customFetch<BotPerformance>(getGetBotPerformanceUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetBotPerformanceQueryKey = () => {
+  return [`/api/bot/performance`] as const;
+};
+
+export const getGetBotPerformanceQueryOptions = <
+  TData = Awaited<ReturnType<typeof getBotPerformance>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getBotPerformance>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetBotPerformanceQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getBotPerformance>>
+  > = ({ signal }) => getBotPerformance({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getBotPerformance>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetBotPerformanceQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getBotPerformance>>
+>;
+export type GetBotPerformanceQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get bot performance statistics
+ */
+
+export function useGetBotPerformance<
+  TData = Awaited<ReturnType<typeof getBotPerformance>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getBotPerformance>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetBotPerformanceQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Fire a simulated test signal using live market prices
+ */
+export const getSendTestSignalUrl = () => {
+  return `/api/bot/test-signal`;
+};
+
+export const sendTestSignal = async (
+  testSignalRequest: TestSignalRequest,
+  options?: RequestInit,
+): Promise<Signal> => {
+  return customFetch<Signal>(getSendTestSignalUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(testSignalRequest),
+  });
+};
+
+export const getSendTestSignalMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendTestSignal>>,
+    TError,
+    { data: BodyType<TestSignalRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof sendTestSignal>>,
+  TError,
+  { data: BodyType<TestSignalRequest> },
+  TContext
+> => {
+  const mutationKey = ["sendTestSignal"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof sendTestSignal>>,
+    { data: BodyType<TestSignalRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return sendTestSignal(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SendTestSignalMutationResult = NonNullable<
+  Awaited<ReturnType<typeof sendTestSignal>>
+>;
+export type SendTestSignalMutationBody = BodyType<TestSignalRequest>;
+export type SendTestSignalMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Fire a simulated test signal using live market prices
+ */
+export const useSendTestSignal = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendTestSignal>>,
+    TError,
+    { data: BodyType<TestSignalRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof sendTestSignal>>,
+  TError,
+  { data: BodyType<TestSignalRequest> },
+  TContext
+> => {
+  return useMutation(getSendTestSignalMutationOptions(options));
+};
 
 /**
  * @summary List all trades

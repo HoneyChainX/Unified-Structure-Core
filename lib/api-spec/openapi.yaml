@@ -158,6 +158,38 @@ paths:
               schema:
                 $ref: "#/components/schemas/BotStatus"
 
+  /bot/performance:
+    get:
+      operationId: getBotPerformance
+      tags: [bot]
+      summary: Get bot performance statistics
+      responses:
+        "200":
+          description: Performance stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotPerformance"
+
+  /bot/test-signal:
+    post:
+      operationId: sendTestSignal
+      tags: [bot]
+      summary: Fire a simulated test signal using live market prices
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TestSignalRequest"
+      responses:
+        "201":
+          description: Test signal created and queued for execution
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Signal"
+
   /bot/trades:
     get:
       operationId: listTrades
@@ -519,6 +551,10 @@ components:
           type: string
         allowedSymbols:
           type: string
+        maxOpenTrades:
+          type: integer
+        cooldownMinutes:
+          type: integer
         slEnabled:
           type: boolean
         tp1Enabled:
@@ -544,6 +580,8 @@ components:
         - minConfW
         - minGrade
         - allowedSymbols
+        - maxOpenTrades
+        - cooldownMinutes
         - slEnabled
         - tp1Enabled
         - tp2Enabled
@@ -568,6 +606,10 @@ components:
           type: string
         allowedSymbols:
           type: string
+        maxOpenTrades:
+          type: integer
+        cooldownMinutes:
+          type: integer
         slEnabled:
           type: boolean
         tp1Enabled:
@@ -599,12 +641,80 @@ components:
           type: integer
         apiConfigured:
           type: boolean
+        lastSyncAt:
+          type: string
+          format: date-time
+          nullable: true
       required:
         - enabled
         - paperMode
         - openTrades
         - totalTrades
         - apiConfigured
+
+    BotPerformance:
+      type: object
+      properties:
+        totalTrades:
+          type: integer
+        closedTrades:
+          type: integer
+        openTrades:
+          type: integer
+        paperTrades:
+          type: integer
+        winRate:
+          type: number
+          nullable: true
+        totalPnl:
+          type: number
+        avgPnl:
+          type: number
+          nullable: true
+        bestTrade:
+          type: number
+          nullable: true
+        worstTrade:
+          type: number
+          nullable: true
+        longWins:
+          type: integer
+        longLosses:
+          type: integer
+        shortWins:
+          type: integer
+        shortLosses:
+          type: integer
+      required:
+        - totalTrades
+        - closedTrades
+        - openTrades
+        - paperTrades
+        - totalPnl
+        - longWins
+        - longLosses
+        - shortWins
+        - shortLosses
+
+    TestSignalRequest:
+      type: object
+      properties:
+        symbol:
+          type: string
+          description: Trading pair e.g. BTCUSDT
+        dir:
+          type: string
+          enum: [LONG, SHORT]
+        tf:
+          type: string
+          description: Timeframe e.g. 4H
+        grade:
+          type: string
+        confW:
+          type: number
+      required:
+        - symbol
+        - dir
 
     Trade:
       type: object
@@ -629,6 +739,9 @@ components:
           type: number
           nullable: true
         entryPrice:
+          type: number
+          nullable: true
+        livePrice:
           type: number
           nullable: true
         entryOrderId:
@@ -657,6 +770,12 @@ components:
           nullable: true
         tp3Price:
           type: number
+          nullable: true
+        closePrice:
+          type: number
+          nullable: true
+        closeReason:
+          type: string
           nullable: true
         pnl:
           type: number
