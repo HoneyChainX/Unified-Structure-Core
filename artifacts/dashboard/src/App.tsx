@@ -6,6 +6,7 @@ import { Layout } from "@/components/layout";
 import { Dashboard } from "@/pages/dashboard";
 import { Signals } from "@/pages/signals";
 import { SignalDetail } from "@/pages/signal-detail";
+import { BotPage } from "@/pages/bot";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -17,6 +18,7 @@ function Router() {
         <Route path="/" component={Dashboard} />
         <Route path="/signals" component={Signals} />
         <Route path="/signal/:id" component={SignalDetail} />
+        <Route path="/bot" component={BotPage} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

@@ -17,11 +17,17 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  BotConfig,
+  BotConfigPatch,
+  BotStatus,
   HealthStatus,
   ListSignalsParams,
+  ListTradesParams,
   Signal,
   SignalList,
   SignalStats,
+  Trade,
+  TradeList,
   WebhookPayload,
 } from "./api.schemas";
 
@@ -441,6 +447,505 @@ export function useGetSignalStats<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Get bot configuration
+ */
+export const getGetBotConfigUrl = () => {
+  return `/api/bot/config`;
+};
+
+export const getBotConfig = async (
+  options?: RequestInit,
+): Promise<BotConfig> => {
+  return customFetch<BotConfig>(getGetBotConfigUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetBotConfigQueryKey = () => {
+  return [`/api/bot/config`] as const;
+};
+
+export const getGetBotConfigQueryOptions = <
+  TData = Awaited<ReturnType<typeof getBotConfig>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getBotConfig>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetBotConfigQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getBotConfig>>> = ({
+    signal,
+  }) => getBotConfig({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getBotConfig>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetBotConfigQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getBotConfig>>
+>;
+export type GetBotConfigQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get bot configuration
+ */
+
+export function useGetBotConfig<
+  TData = Awaited<ReturnType<typeof getBotConfig>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getBotConfig>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetBotConfigQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Update bot configuration
+ */
+export const getUpdateBotConfigUrl = () => {
+  return `/api/bot/config`;
+};
+
+export const updateBotConfig = async (
+  botConfigPatch: BotConfigPatch,
+  options?: RequestInit,
+): Promise<BotConfig> => {
+  return customFetch<BotConfig>(getUpdateBotConfigUrl(), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(botConfigPatch),
+  });
+};
+
+export const getUpdateBotConfigMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateBotConfig>>,
+    TError,
+    { data: BodyType<BotConfigPatch> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateBotConfig>>,
+  TError,
+  { data: BodyType<BotConfigPatch> },
+  TContext
+> => {
+  const mutationKey = ["updateBotConfig"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateBotConfig>>,
+    { data: BodyType<BotConfigPatch> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return updateBotConfig(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateBotConfigMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateBotConfig>>
+>;
+export type UpdateBotConfigMutationBody = BodyType<BotConfigPatch>;
+export type UpdateBotConfigMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Update bot configuration
+ */
+export const useUpdateBotConfig = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateBotConfig>>,
+    TError,
+    { data: BodyType<BotConfigPatch> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateBotConfig>>,
+  TError,
+  { data: BodyType<BotConfigPatch> },
+  TContext
+> => {
+  return useMutation(getUpdateBotConfigMutationOptions(options));
+};
+
+/**
+ * @summary Get bot runtime status including balance
+ */
+export const getGetBotStatusUrl = () => {
+  return `/api/bot/status`;
+};
+
+export const getBotStatus = async (
+  options?: RequestInit,
+): Promise<BotStatus> => {
+  return customFetch<BotStatus>(getGetBotStatusUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetBotStatusQueryKey = () => {
+  return [`/api/bot/status`] as const;
+};
+
+export const getGetBotStatusQueryOptions = <
+  TData = Awaited<ReturnType<typeof getBotStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getBotStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetBotStatusQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getBotStatus>>> = ({
+    signal,
+  }) => getBotStatus({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getBotStatus>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetBotStatusQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getBotStatus>>
+>;
+export type GetBotStatusQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get bot runtime status including balance
+ */
+
+export function useGetBotStatus<
+  TData = Awaited<ReturnType<typeof getBotStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getBotStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetBotStatusQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary List all trades
+ */
+export const getListTradesUrl = (params?: ListTradesParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/bot/trades?${stringifiedParams}`
+    : `/api/bot/trades`;
+};
+
+export const listTrades = async (
+  params?: ListTradesParams,
+  options?: RequestInit,
+): Promise<TradeList> => {
+  return customFetch<TradeList>(getListTradesUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListTradesQueryKey = (params?: ListTradesParams) => {
+  return [`/api/bot/trades`, ...(params ? [params] : [])] as const;
+};
+
+export const getListTradesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listTrades>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListTradesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listTrades>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListTradesQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listTrades>>> = ({
+    signal,
+  }) => listTrades(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listTrades>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListTradesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listTrades>>
+>;
+export type ListTradesQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List all trades
+ */
+
+export function useListTrades<
+  TData = Awaited<ReturnType<typeof listTrades>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListTradesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listTrades>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListTradesQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get a single trade
+ */
+export const getGetTradeUrl = (id: number) => {
+  return `/api/bot/trades/${id}`;
+};
+
+export const getTrade = async (
+  id: number,
+  options?: RequestInit,
+): Promise<Trade> => {
+  return customFetch<Trade>(getGetTradeUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetTradeQueryKey = (id: number) => {
+  return [`/api/bot/trades/${id}`] as const;
+};
+
+export const getGetTradeQueryOptions = <
+  TData = Awaited<ReturnType<typeof getTrade>>,
+  TError = ErrorType<void>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getTrade>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetTradeQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getTrade>>> = ({
+    signal,
+  }) => getTrade(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof getTrade>>, TError, TData> & {
+    queryKey: QueryKey;
+  };
+};
+
+export type GetTradeQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getTrade>>
+>;
+export type GetTradeQueryError = ErrorType<void>;
+
+/**
+ * @summary Get a single trade
+ */
+
+export function useGetTrade<
+  TData = Awaited<ReturnType<typeof getTrade>>,
+  TError = ErrorType<void>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getTrade>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetTradeQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Cancel an open trade (cancels SL/TP orders)
+ */
+export const getCancelTradeUrl = (id: number) => {
+  return `/api/bot/trades/${id}`;
+};
+
+export const cancelTrade = async (
+  id: number,
+  options?: RequestInit,
+): Promise<Trade> => {
+  return customFetch<Trade>(getCancelTradeUrl(id), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getCancelTradeMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof cancelTrade>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof cancelTrade>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["cancelTrade"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof cancelTrade>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return cancelTrade(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CancelTradeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof cancelTrade>>
+>;
+
+export type CancelTradeMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Cancel an open trade (cancels SL/TP orders)
+ */
+export const useCancelTrade = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof cancelTrade>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof cancelTrade>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getCancelTradeMutationOptions(options));
+};
 
 /**
  * @summary Get a single signal by ID

@@ -12,6 +12,8 @@ tags:
     description: Health operations
   - name: signals
     description: Trading signal operations
+  - name: bot
+    description: Trading bot operations
 paths:
   /healthz:
     get:
@@ -112,6 +114,115 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SignalStats"
+
+  /bot/config:
+    get:
+      operationId: getBotConfig
+      tags: [bot]
+      summary: Get bot configuration
+      responses:
+        "200":
+          description: Bot configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotConfig"
+    put:
+      operationId: updateBotConfig
+      tags: [bot]
+      summary: Update bot configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BotConfigPatch"
+      responses:
+        "200":
+          description: Updated config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotConfig"
+
+  /bot/status:
+    get:
+      operationId: getBotStatus
+      tags: [bot]
+      summary: Get bot runtime status including balance
+      responses:
+        "200":
+          description: Bot status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotStatus"
+
+  /bot/trades:
+    get:
+      operationId: listTrades
+      tags: [bot]
+      summary: List all trades
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Trade list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradeList"
+
+  /bot/trades/{id}:
+    get:
+      operationId: getTrade
+      tags: [bot]
+      summary: Get a single trade
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Trade
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trade"
+        "404":
+          description: Not found
+    delete:
+      operationId: cancelTrade
+      tags: [bot]
+      summary: Cancel an open trade (cancels SL/TP orders)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Cancelled trade
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trade"
 
   /signals/{id}:
     get:
@@ -390,3 +501,196 @@ components:
         - lowConf
         - symbolBreakdown
         - gradeBreakdown
+
+    BotConfig:
+      type: object
+      properties:
+        id:
+          type: integer
+        enabled:
+          type: boolean
+        paperMode:
+          type: boolean
+        positionSizeUsdt:
+          type: number
+        minConfW:
+          type: number
+        minGrade:
+          type: string
+        allowedSymbols:
+          type: string
+        slEnabled:
+          type: boolean
+        tp1Enabled:
+          type: boolean
+        tp2Enabled:
+          type: boolean
+        tp3Enabled:
+          type: boolean
+        tp1Pct:
+          type: number
+        tp2Pct:
+          type: number
+        tp3Pct:
+          type: number
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - enabled
+        - paperMode
+        - positionSizeUsdt
+        - minConfW
+        - minGrade
+        - allowedSymbols
+        - slEnabled
+        - tp1Enabled
+        - tp2Enabled
+        - tp3Enabled
+        - tp1Pct
+        - tp2Pct
+        - tp3Pct
+        - updatedAt
+
+    BotConfigPatch:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        paperMode:
+          type: boolean
+        positionSizeUsdt:
+          type: number
+        minConfW:
+          type: number
+        minGrade:
+          type: string
+        allowedSymbols:
+          type: string
+        slEnabled:
+          type: boolean
+        tp1Enabled:
+          type: boolean
+        tp2Enabled:
+          type: boolean
+        tp3Enabled:
+          type: boolean
+        tp1Pct:
+          type: number
+        tp2Pct:
+          type: number
+        tp3Pct:
+          type: number
+
+    BotStatus:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        paperMode:
+          type: boolean
+        usdtBalance:
+          type: number
+          nullable: true
+        openTrades:
+          type: integer
+        totalTrades:
+          type: integer
+        apiConfigured:
+          type: boolean
+      required:
+        - enabled
+        - paperMode
+        - openTrades
+        - totalTrades
+        - apiConfigured
+
+    Trade:
+      type: object
+      properties:
+        id:
+          type: integer
+        signalId:
+          type: integer
+          nullable: true
+        symbol:
+          type: string
+        gateSymbol:
+          type: string
+        side:
+          type: string
+        status:
+          type: string
+        positionSizeUsdt:
+          type: number
+          nullable: true
+        quantity:
+          type: number
+          nullable: true
+        entryPrice:
+          type: number
+          nullable: true
+        entryOrderId:
+          type: string
+          nullable: true
+        slOrderId:
+          type: string
+          nullable: true
+        tp1OrderId:
+          type: string
+          nullable: true
+        tp2OrderId:
+          type: string
+          nullable: true
+        tp3OrderId:
+          type: string
+          nullable: true
+        slPrice:
+          type: number
+          nullable: true
+        tp1Price:
+          type: number
+          nullable: true
+        tp2Price:
+          type: number
+          nullable: true
+        tp3Price:
+          type: number
+          nullable: true
+        pnl:
+          type: number
+          nullable: true
+        errorMessage:
+          type: string
+          nullable: true
+        paperMode:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        closedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+        - id
+        - symbol
+        - gateSymbol
+        - side
+        - status
+        - paperMode
+        - createdAt
+
+    TradeList:
+      type: object
+      properties:
+        trades:
+          type: array
+          items:
+            $ref: "#/components/schemas/Trade"
+        total:
+          type: integer
+      required:
+        - trades
+        - total

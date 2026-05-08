@@ -169,6 +169,185 @@ export const GetSignalStatsResponse = zod.object({
 });
 
 /**
+ * @summary Get bot configuration
+ */
+export const GetBotConfigResponse = zod.object({
+  id: zod.number(),
+  enabled: zod.boolean(),
+  paperMode: zod.boolean(),
+  positionSizeUsdt: zod.number(),
+  minConfW: zod.number(),
+  minGrade: zod.string(),
+  allowedSymbols: zod.string(),
+  slEnabled: zod.boolean(),
+  tp1Enabled: zod.boolean(),
+  tp2Enabled: zod.boolean(),
+  tp3Enabled: zod.boolean(),
+  tp1Pct: zod.number(),
+  tp2Pct: zod.number(),
+  tp3Pct: zod.number(),
+  updatedAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Update bot configuration
+ */
+export const UpdateBotConfigBody = zod.object({
+  enabled: zod.boolean().optional(),
+  paperMode: zod.boolean().optional(),
+  positionSizeUsdt: zod.number().optional(),
+  minConfW: zod.number().optional(),
+  minGrade: zod.string().optional(),
+  allowedSymbols: zod.string().optional(),
+  slEnabled: zod.boolean().optional(),
+  tp1Enabled: zod.boolean().optional(),
+  tp2Enabled: zod.boolean().optional(),
+  tp3Enabled: zod.boolean().optional(),
+  tp1Pct: zod.number().optional(),
+  tp2Pct: zod.number().optional(),
+  tp3Pct: zod.number().optional(),
+});
+
+export const UpdateBotConfigResponse = zod.object({
+  id: zod.number(),
+  enabled: zod.boolean(),
+  paperMode: zod.boolean(),
+  positionSizeUsdt: zod.number(),
+  minConfW: zod.number(),
+  minGrade: zod.string(),
+  allowedSymbols: zod.string(),
+  slEnabled: zod.boolean(),
+  tp1Enabled: zod.boolean(),
+  tp2Enabled: zod.boolean(),
+  tp3Enabled: zod.boolean(),
+  tp1Pct: zod.number(),
+  tp2Pct: zod.number(),
+  tp3Pct: zod.number(),
+  updatedAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Get bot runtime status including balance
+ */
+export const GetBotStatusResponse = zod.object({
+  enabled: zod.boolean(),
+  paperMode: zod.boolean(),
+  usdtBalance: zod.number().nullish(),
+  openTrades: zod.number(),
+  totalTrades: zod.number(),
+  apiConfigured: zod.boolean(),
+});
+
+/**
+ * @summary List all trades
+ */
+export const listTradesQueryLimitDefault = 50;
+export const listTradesQueryOffsetDefault = 0;
+
+export const ListTradesQueryParams = zod.object({
+  limit: zod.coerce.number().default(listTradesQueryLimitDefault),
+  offset: zod.coerce.number().default(listTradesQueryOffsetDefault),
+  status: zod.coerce.string().optional(),
+});
+
+export const ListTradesResponse = zod.object({
+  trades: zod.array(
+    zod.object({
+      id: zod.number(),
+      signalId: zod.number().nullish(),
+      symbol: zod.string(),
+      gateSymbol: zod.string(),
+      side: zod.string(),
+      status: zod.string(),
+      positionSizeUsdt: zod.number().nullish(),
+      quantity: zod.number().nullish(),
+      entryPrice: zod.number().nullish(),
+      entryOrderId: zod.string().nullish(),
+      slOrderId: zod.string().nullish(),
+      tp1OrderId: zod.string().nullish(),
+      tp2OrderId: zod.string().nullish(),
+      tp3OrderId: zod.string().nullish(),
+      slPrice: zod.number().nullish(),
+      tp1Price: zod.number().nullish(),
+      tp2Price: zod.number().nullish(),
+      tp3Price: zod.number().nullish(),
+      pnl: zod.number().nullish(),
+      errorMessage: zod.string().nullish(),
+      paperMode: zod.boolean(),
+      createdAt: zod.coerce.date(),
+      closedAt: zod.coerce.date().nullish(),
+    }),
+  ),
+  total: zod.number(),
+});
+
+/**
+ * @summary Get a single trade
+ */
+export const GetTradeParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const GetTradeResponse = zod.object({
+  id: zod.number(),
+  signalId: zod.number().nullish(),
+  symbol: zod.string(),
+  gateSymbol: zod.string(),
+  side: zod.string(),
+  status: zod.string(),
+  positionSizeUsdt: zod.number().nullish(),
+  quantity: zod.number().nullish(),
+  entryPrice: zod.number().nullish(),
+  entryOrderId: zod.string().nullish(),
+  slOrderId: zod.string().nullish(),
+  tp1OrderId: zod.string().nullish(),
+  tp2OrderId: zod.string().nullish(),
+  tp3OrderId: zod.string().nullish(),
+  slPrice: zod.number().nullish(),
+  tp1Price: zod.number().nullish(),
+  tp2Price: zod.number().nullish(),
+  tp3Price: zod.number().nullish(),
+  pnl: zod.number().nullish(),
+  errorMessage: zod.string().nullish(),
+  paperMode: zod.boolean(),
+  createdAt: zod.coerce.date(),
+  closedAt: zod.coerce.date().nullish(),
+});
+
+/**
+ * @summary Cancel an open trade (cancels SL/TP orders)
+ */
+export const CancelTradeParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const CancelTradeResponse = zod.object({
+  id: zod.number(),
+  signalId: zod.number().nullish(),
+  symbol: zod.string(),
+  gateSymbol: zod.string(),
+  side: zod.string(),
+  status: zod.string(),
+  positionSizeUsdt: zod.number().nullish(),
+  quantity: zod.number().nullish(),
+  entryPrice: zod.number().nullish(),
+  entryOrderId: zod.string().nullish(),
+  slOrderId: zod.string().nullish(),
+  tp1OrderId: zod.string().nullish(),
+  tp2OrderId: zod.string().nullish(),
+  tp3OrderId: zod.string().nullish(),
+  slPrice: zod.number().nullish(),
+  tp1Price: zod.number().nullish(),
+  tp2Price: zod.number().nullish(),
+  tp3Price: zod.number().nullish(),
+  pnl: zod.number().nullish(),
+  errorMessage: zod.string().nullish(),
+  paperMode: zod.boolean(),
+  createdAt: zod.coerce.date(),
+  closedAt: zod.coerce.date().nullish(),
+});
+
+/**
  * @summary Get a single signal by ID
  */
 export const GetSignalParams = zod.object({

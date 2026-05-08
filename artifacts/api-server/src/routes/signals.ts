@@ -61,6 +61,13 @@ router.post("/webhook", async (req, res): Promise<void> => {
 
   req.log.info({ id: signal.id, symbol: signal.symbol }, "Signal stored");
   res.status(201).json(signal);
+
+  // Fire-and-forget trade execution (don't block the webhook response)
+  import("../services/executor").then(({ executeSignal }) => {
+    executeSignal(signal).catch((err: unknown) => {
+      req.log.error({ err, signalId: signal.id }, "Executor error");
+    });
+  });
 });
 
 router.get("/latest", async (req, res): Promise<void> => {

@@ -131,6 +131,80 @@ export interface SignalStats {
   gradeBreakdown: SignalStatsGradeBreakdownItem[];
 }
 
+export interface BotConfig {
+  id: number;
+  enabled: boolean;
+  paperMode: boolean;
+  positionSizeUsdt: number;
+  minConfW: number;
+  minGrade: string;
+  allowedSymbols: string;
+  slEnabled: boolean;
+  tp1Enabled: boolean;
+  tp2Enabled: boolean;
+  tp3Enabled: boolean;
+  tp1Pct: number;
+  tp2Pct: number;
+  tp3Pct: number;
+  updatedAt: string;
+}
+
+export interface BotConfigPatch {
+  enabled?: boolean;
+  paperMode?: boolean;
+  positionSizeUsdt?: number;
+  minConfW?: number;
+  minGrade?: string;
+  allowedSymbols?: string;
+  slEnabled?: boolean;
+  tp1Enabled?: boolean;
+  tp2Enabled?: boolean;
+  tp3Enabled?: boolean;
+  tp1Pct?: number;
+  tp2Pct?: number;
+  tp3Pct?: number;
+}
+
+export interface BotStatus {
+  enabled: boolean;
+  paperMode: boolean;
+  usdtBalance?: number | null;
+  openTrades: number;
+  totalTrades: number;
+  apiConfigured: boolean;
+}
+
+export interface Trade {
+  id: number;
+  signalId?: number | null;
+  symbol: string;
+  gateSymbol: string;
+  side: string;
+  status: string;
+  positionSizeUsdt?: number | null;
+  quantity?: number | null;
+  entryPrice?: number | null;
+  entryOrderId?: string | null;
+  slOrderId?: string | null;
+  tp1OrderId?: string | null;
+  tp2OrderId?: string | null;
+  tp3OrderId?: string | null;
+  slPrice?: number | null;
+  tp1Price?: number | null;
+  tp2Price?: number | null;
+  tp3Price?: number | null;
+  pnl?: number | null;
+  errorMessage?: string | null;
+  paperMode: boolean;
+  createdAt: string;
+  closedAt?: string | null;
+}
+
+export interface TradeList {
+  trades: Trade[];
+  total: number;
+}
+
 export type ListSignalsParams = {
   limit?: number;
   offset?: number;
@@ -146,3 +220,9 @@ export const ListSignalsDir = {
   LONG: "LONG",
   SHORT: "SHORT",
 } as const;
+
+export type ListTradesParams = {
+  limit?: number;
+  offset?: number;
+  status?: string;
+};

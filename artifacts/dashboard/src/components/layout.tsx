@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { Activity, LayoutDashboard, List, Settings } from "lucide-react";
+import { Activity, LayoutDashboard, List, Bot } from "lucide-react";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
@@ -27,6 +27,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
           >
             <List className="w-5 h-5 shrink-0" />
             <span className="hidden md:block text-sm font-medium">Signals</span>
+          </Link>
+          <Link 
+            href="/bot" 
+            className={`flex items-center gap-3 px-2 md:px-3 py-2.5 rounded-md transition-colors ${location.startsWith("/bot") ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}
+          >
+            <Bot className="w-5 h-5 shrink-0" />
+            <span className="hidden md:block text-sm font-medium">Bot</span>
           </Link>
         </nav>
       </aside>

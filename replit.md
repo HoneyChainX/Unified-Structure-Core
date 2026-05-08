@@ -54,6 +54,28 @@ The alert message must be the JSON output from the Pine Script's alert block (al
 - **Main dashboard** (`/`): Latest signal with full entry plan, gate status, confidence bar, context/rotation, and a recent signals table.
 - **Signal history** (`/signals`): Filterable/sortable table of all signals with pagination.
 - **Signal detail** (`/signal/:id`): Full expanded view of any signal with a visual level map and raw webhook payload.
+- **Bot control** (`/bot`): Gate.io spot trading bot — configure position size, confidence thresholds, symbol allowlist, SL/TP rules, paper vs live mode. Trade history with cancel support.
+
+## Trading Bot
+
+The bot fires automatically after each webhook signal is stored. Execution logic:
+1. Check bot is enabled and signal is `triggered`
+2. Check `conf_w` >= `min_conf_w` threshold
+3. Check `grade` >= `min_grade` threshold
+4. Check symbol is in allowlist (if set)
+5. In paper mode: record simulated trade
+6. In live mode: market buy/sell via Gate.io Spot API, then place SL stop-limit and TP price-triggered orders
+
+Required secrets for live trading: `GATEIO_API_KEY`, `GATEIO_API_SECRET`
+
+## Where things live (extended)
+
+- `lib/db/src/schema/bot-config.ts` — Bot configuration table
+- `lib/db/src/schema/trades.ts` — Trade history table
+- `artifacts/api-server/src/services/gateio.ts` — Gate.io API client (HMAC-SHA512 auth)
+- `artifacts/api-server/src/services/executor.ts` — Signal-to-trade execution logic
+- `artifacts/api-server/src/routes/bot.ts` — Bot config + trade history API routes
+- `artifacts/dashboard/src/pages/bot.tsx` — Bot control page
 
 ## User preferences
 

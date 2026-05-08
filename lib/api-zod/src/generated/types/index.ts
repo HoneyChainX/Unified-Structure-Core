@@ -6,9 +6,13 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from "./botConfig";
+export * from "./botConfigPatch";
+export * from "./botStatus";
 export * from "./healthStatus";
 export * from "./listSignalsDir";
 export * from "./listSignalsParams";
+export * from "./listTradesParams";
 export * from "./signal";
 export * from "./signalDir";
 export * from "./signalList";
@@ -16,6 +20,8 @@ export * from "./signalRawPayload";
 export * from "./signalStats";
 export * from "./signalStatsGradeBreakdownItem";
 export * from "./signalStatsSymbolBreakdownItem";
+export * from "./trade";
+export * from "./tradeList";
 export * from "./webhookPayload";
 export * from "./webhookPayloadDir";
 export * from "./webhookPayloadRiskTier";
