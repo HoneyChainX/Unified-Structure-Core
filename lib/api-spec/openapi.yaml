@@ -218,6 +218,40 @@ paths:
               schema:
                 $ref: "#/components/schemas/TradeList"
 
+  /bot/equity-curve:
+    get:
+      operationId: getEquityCurve
+      tags: [bot]
+      summary: Closed trade equity curve
+      responses:
+        "200":
+          description: Equity curve data points
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EquityCurve"
+
+  /bot/trades/by-signal/{signalId}:
+    get:
+      operationId: getTradeBySignal
+      tags: [bot]
+      summary: Get the trade linked to a signal (if any)
+      parameters:
+        - name: signalId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Trade
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trade"
+        "404":
+          description: No trade for this signal
+
   /bot/trades/{id}:
     get:
       operationId: getTrade
@@ -534,6 +568,46 @@ components:
         - symbolBreakdown
         - gradeBreakdown
 
+    EquityCurvePoint:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date-time
+        pnl:
+          type: number
+        cumulative:
+          type: number
+        symbol:
+          type: string
+        closeReason:
+          type: string
+          nullable: true
+        returnPct:
+          type: number
+          nullable: true
+      required:
+        - date
+        - pnl
+        - cumulative
+        - symbol
+
+    EquityCurve:
+      type: object
+      properties:
+        points:
+          type: array
+          items:
+            $ref: "#/components/schemas/EquityCurvePoint"
+        totalPnl:
+          type: number
+        totalReturnPct:
+          type: number
+          nullable: true
+      required:
+        - points
+        - totalPnl
+
     BotConfig:
       type: object
       properties:
@@ -542,6 +616,8 @@ components:
         enabled:
           type: boolean
         paperMode:
+          type: boolean
+        longOnly:
           type: boolean
         positionSizeUsdt:
           type: number
@@ -582,6 +658,7 @@ components:
         - allowedSymbols
         - maxOpenTrades
         - cooldownMinutes
+        - longOnly
         - slEnabled
         - tp1Enabled
         - tp2Enabled
@@ -597,6 +674,8 @@ components:
         enabled:
           type: boolean
         paperMode:
+          type: boolean
+        longOnly:
           type: boolean
         positionSizeUsdt:
           type: number

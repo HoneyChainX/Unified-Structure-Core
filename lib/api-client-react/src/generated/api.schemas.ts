@@ -131,10 +131,26 @@ export interface SignalStats {
   gradeBreakdown: SignalStatsGradeBreakdownItem[];
 }
 
+export interface EquityCurvePoint {
+  date: string;
+  pnl: number;
+  cumulative: number;
+  symbol: string;
+  closeReason?: string | null;
+  returnPct?: number | null;
+}
+
+export interface EquityCurve {
+  points: EquityCurvePoint[];
+  totalPnl: number;
+  totalReturnPct?: number | null;
+}
+
 export interface BotConfig {
   id: number;
   enabled: boolean;
   paperMode: boolean;
+  longOnly: boolean;
   positionSizeUsdt: number;
   minConfW: number;
   minGrade: string;
@@ -154,6 +170,7 @@ export interface BotConfig {
 export interface BotConfigPatch {
   enabled?: boolean;
   paperMode?: boolean;
+  longOnly?: boolean;
   positionSizeUsdt?: number;
   minConfW?: number;
   minGrade?: string;

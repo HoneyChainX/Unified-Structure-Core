@@ -9,6 +9,7 @@ import {
   toGateSymbol,
 } from "./gateio";
 import { logger } from "../lib/logger";
+import { notifyTradeOpened } from "./notify";
 
 const GRADE_ORDER: Record<string, number> = {
   "None": 0,
@@ -115,6 +116,12 @@ export async function executeSignal(signal: Signal): Promise<void> {
     }
   }
 
+  // Long-only guard
+  if (config.longOnly && signal.dir === "SHORT") {
+    logger.info({ signalId: signal.id }, "Long-only mode: skipping SHORT signal");
+    return;
+  }
+
   const gateSymbol = toGateSymbol(signal.symbol);
   const side = signal.dir === "LONG" ? "buy" : "sell";
 
@@ -157,6 +164,15 @@ export async function executeSignal(signal: Signal): Promise<void> {
       { tradeId: trade.id, symbol: signal.symbol, side, entryPrice, quantity },
       "Paper trade recorded with live price"
     );
+    notifyTradeOpened({
+      symbol: signal.symbol,
+      side,
+      entryPrice,
+      positionSizeUsdt: config.positionSizeUsdt,
+      slPrice: signal.sl,
+      tp1Price: signal.tp1,
+      paperMode: true,
+    });
     return;
   }
 
@@ -203,6 +219,15 @@ export async function executeSignal(signal: Signal): Promise<void> {
     }).where(eq(tradesTable.id, trade.id));
 
     logger.info({ tradeId: trade.id, entryOrderId: entryOrder.id, entryPrice, quantity }, "Entry order placed");
+    notifyTradeOpened({
+      symbol: signal.symbol,
+      side,
+      entryPrice,
+      positionSizeUsdt: config.positionSizeUsdt,
+      slPrice: signal.sl,
+      tp1Price: signal.tp1,
+      paperMode: false,
+    });
 
     const tpOrders: { tp1OrderId?: string; tp2OrderId?: string; tp3OrderId?: string; slOrderId?: string } = {};
 

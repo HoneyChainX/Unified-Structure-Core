@@ -175,6 +175,7 @@ export const GetBotConfigResponse = zod.object({
   id: zod.number(),
   enabled: zod.boolean(),
   paperMode: zod.boolean(),
+  longOnly: zod.boolean(),
   positionSizeUsdt: zod.number(),
   minConfW: zod.number(),
   minGrade: zod.string(),
@@ -197,6 +198,7 @@ export const GetBotConfigResponse = zod.object({
 export const UpdateBotConfigBody = zod.object({
   enabled: zod.boolean().optional(),
   paperMode: zod.boolean().optional(),
+  longOnly: zod.boolean().optional(),
   positionSizeUsdt: zod.number().optional(),
   minConfW: zod.number().optional(),
   minGrade: zod.string().optional(),
@@ -216,6 +218,7 @@ export const UpdateBotConfigResponse = zod.object({
   id: zod.number(),
   enabled: zod.boolean(),
   paperMode: zod.boolean(),
+  longOnly: zod.boolean(),
   positionSizeUsdt: zod.number(),
   minConfW: zod.number(),
   minGrade: zod.string(),
@@ -319,6 +322,60 @@ export const ListTradesResponse = zod.object({
     }),
   ),
   total: zod.number(),
+});
+
+/**
+ * @summary Closed trade equity curve
+ */
+export const GetEquityCurveResponse = zod.object({
+  points: zod.array(
+    zod.object({
+      date: zod.coerce.date(),
+      pnl: zod.number(),
+      cumulative: zod.number(),
+      symbol: zod.string(),
+      closeReason: zod.string().nullish(),
+      returnPct: zod.number().nullish(),
+    }),
+  ),
+  totalPnl: zod.number(),
+  totalReturnPct: zod.number().nullish(),
+});
+
+/**
+ * @summary Get the trade linked to a signal (if any)
+ */
+export const GetTradeBySignalParams = zod.object({
+  signalId: zod.coerce.number(),
+});
+
+export const GetTradeBySignalResponse = zod.object({
+  id: zod.number(),
+  signalId: zod.number().nullish(),
+  symbol: zod.string(),
+  gateSymbol: zod.string(),
+  side: zod.string(),
+  status: zod.string(),
+  positionSizeUsdt: zod.number().nullish(),
+  quantity: zod.number().nullish(),
+  entryPrice: zod.number().nullish(),
+  livePrice: zod.number().nullish(),
+  entryOrderId: zod.string().nullish(),
+  slOrderId: zod.string().nullish(),
+  tp1OrderId: zod.string().nullish(),
+  tp2OrderId: zod.string().nullish(),
+  tp3OrderId: zod.string().nullish(),
+  slPrice: zod.number().nullish(),
+  tp1Price: zod.number().nullish(),
+  tp2Price: zod.number().nullish(),
+  tp3Price: zod.number().nullish(),
+  closePrice: zod.number().nullish(),
+  closeReason: zod.string().nullish(),
+  pnl: zod.number().nullish(),
+  errorMessage: zod.string().nullish(),
+  paperMode: zod.boolean(),
+  createdAt: zod.coerce.date(),
+  closedAt: zod.coerce.date().nullish(),
 });
 
 /**

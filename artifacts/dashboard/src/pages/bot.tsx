@@ -7,12 +7,24 @@ import {
   useCancelTrade,
   useGetBotPerformance,
   useSendTestSignal,
+  useGetEquityCurve,
   getGetBotConfigQueryKey,
   getGetBotStatusQueryKey,
   getListTradesQueryKey,
   getGetBotPerformanceQueryKey,
+  getGetEquityCurveQueryKey,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  ReferenceLine,
+} from "recharts";
 import {
   Bot,
   AlertTriangle,
@@ -32,6 +44,8 @@ import {
   PlayCircle,
   Timer,
   Layers,
+  ArrowUpRight,
+  TrendingDown as TrendingDownIcon,
 } from "lucide-react";
 import { Link } from "wouter";
 
@@ -43,12 +57,13 @@ function fmt(v: number | null | undefined, d = 4) {
 function fmtPnl(v: number | null | undefined) {
   if (v == null) return null;
   const sign = v >= 0 ? "+" : "";
-  return `${sign}${v.toFixed(4)} USDT`;
+  return `${sign}${v.toFixed(4)}`;
 }
 
-function fmtPct(v: number | null | undefined) {
+function fmtPct(v: number | null | undefined, suffix = "%") {
   if (v == null) return "—";
-  return `${(v * 100).toFixed(1)}%`;
+  const sign = v >= 0 ? "+" : "";
+  return `${sign}${v.toFixed(2)}${suffix}`;
 }
 
 function timeSince(dateStr: string) {
@@ -79,6 +94,32 @@ function StatusBadge({ status }: { status: string }) {
 
 const TEST_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT"];
 
+function computeReturnPct(trade: { pnl?: number | null; entryPrice?: number | null; quantity?: number | null; positionSizeUsdt?: number | null }) {
+  if (trade.pnl == null) return null;
+  const cost =
+    trade.entryPrice != null && trade.quantity != null
+      ? trade.entryPrice * trade.quantity
+      : trade.positionSizeUsdt;
+  if (!cost || cost <= 0) return null;
+  return (trade.pnl / cost) * 100;
+}
+
+// Custom tooltip for equity curve
+function EquityTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: { symbol: string; pnl: number; cumulative: number; closeReason: string | null; returnPct: number | null } }> }) {
+  if (!active || !payload?.[0]) return null;
+  const d = payload[0].payload;
+  const pnlColor = d.pnl >= 0 ? "text-green-400" : "text-red-400";
+  const cumColor = d.cumulative >= 0 ? "text-green-400" : "text-red-400";
+  return (
+    <div className="bg-card border border-border px-3 py-2 text-xs font-mono space-y-1 shadow-lg">
+      <div className="font-bold text-foreground">{d.symbol}</div>
+      <div className={pnlColor}>Trade: {d.pnl >= 0 ? "+" : ""}{d.pnl.toFixed(4)} USDT{d.returnPct != null ? ` (${fmtPct(d.returnPct)})` : ""}</div>
+      <div className={cumColor}>Cumulative: {d.cumulative >= 0 ? "+" : ""}{d.cumulative.toFixed(4)} USDT</div>
+      {d.closeReason && <div className="text-muted-foreground">via {d.closeReason.toUpperCase()}</div>}
+    </div>
+  );
+}
+
 export function BotPage() {
   const queryClient = useQueryClient();
   const { data: config, isLoading: configLoading } = useGetBotConfig({
@@ -92,6 +133,9 @@ export function BotPage() {
   });
   const { data: perf, refetch: refetchPerf } = useGetBotPerformance({
     query: { queryKey: getGetBotPerformanceQueryKey(), refetchInterval: 30000 }
+  });
+  const { data: equityCurve, refetch: refetchEquity } = useGetEquityCurve({
+    query: { queryKey: getGetEquityCurveQueryKey(), refetchInterval: 30000 }
   });
 
   const updateMutation = useUpdateBotConfig();
@@ -144,6 +188,7 @@ export function BotPage() {
     await cancelMutation.mutateAsync({ id });
     refetchTrades();
     refetchPerf();
+    refetchEquity();
   }
 
   async function fireTestSignal() {
@@ -153,6 +198,7 @@ export function BotPage() {
       setTimeout(() => {
         refetchTrades();
         refetchPerf();
+        refetchEquity();
         queryClient.invalidateQueries({ queryKey: getGetBotStatusQueryKey() });
       }, 1500);
     } finally {
@@ -167,6 +213,10 @@ export function BotPage() {
   const apiOk = status?.apiConfigured;
   const isEnabled = config?.enabled;
   const isPaper = config?.paperMode;
+  const isLongOnly = field("longOnly", false) as boolean;
+
+  const equityPoints = equityCurve?.points ?? [];
+  const hasEquityData = equityPoints.length >= 1;
 
   return (
     <div className="space-y-5 max-w-4xl">
@@ -185,6 +235,12 @@ export function BotPage() {
             <span className="flex items-center gap-1.5 px-2 py-1 border border-green-500/40 text-green-400 bg-green-500/10 text-xs font-bold animate-pulse">
               <Zap className="w-3 h-3" />
               LIVE TRADING
+            </span>
+          )}
+          {config?.longOnly && (
+            <span className="flex items-center gap-1.5 px-2 py-1 border border-blue-500/40 text-blue-400 bg-blue-500/10 text-xs font-bold">
+              <ArrowUpRight className="w-3 h-3" />
+              LONG ONLY
             </span>
           )}
         </div>
@@ -252,7 +308,7 @@ export function BotPage() {
             <div>
               <div className="text-xs text-muted-foreground tracking-widest mb-1">WIN RATE</div>
               <div className={`text-xl font-bold font-mono ${perf.winRate != null ? (perf.winRate >= 0.5 ? "text-green-400" : "text-red-400") : ""}`}>
-                {perf.winRate != null ? fmtPct(perf.winRate) : "—"}
+                {perf.winRate != null ? `${(perf.winRate * 100).toFixed(1)}%` : "—"}
               </div>
               <div className="text-xs text-muted-foreground mt-0.5">{perf.closedTrades} closed</div>
             </div>
@@ -261,7 +317,14 @@ export function BotPage() {
               <div className={`text-xl font-bold font-mono ${perf.totalPnl >= 0 ? "text-green-400" : "text-red-400"}`}>
                 {perf.totalPnl >= 0 ? "+" : ""}{perf.totalPnl.toFixed(4)}
               </div>
-              <div className="text-xs text-muted-foreground mt-0.5">USDT</div>
+              <div className="text-xs text-muted-foreground mt-0.5">
+                USDT
+                {equityCurve?.totalReturnPct != null && (
+                  <span className={`ml-2 font-bold ${equityCurve.totalReturnPct >= 0 ? "text-green-400" : "text-red-400"}`}>
+                    {fmtPct(equityCurve.totalReturnPct)}
+                  </span>
+                )}
+              </div>
             </div>
             <div>
               <div className="text-xs text-muted-foreground tracking-widest mb-1">BEST TRADE</div>
@@ -275,6 +338,64 @@ export function BotPage() {
                 {perf.worstTrade != null ? perf.worstTrade.toFixed(4) : "—"}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Equity Curve */}
+      {hasEquityData && (
+        <div className="border border-border bg-card">
+          <div className="px-4 py-3 border-b border-border bg-secondary/30 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <TrendingUp className="w-3.5 h-3.5 text-primary" />
+              <span className="text-xs text-muted-foreground tracking-widest font-bold">EQUITY CURVE</span>
+            </div>
+            <div className="text-xs text-muted-foreground font-mono">
+              {equityPoints.length} trade{equityPoints.length !== 1 ? "s" : ""}
+              {equityCurve?.totalPnl != null && (
+                <span className={`ml-3 font-bold ${equityCurve.totalPnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+                  {equityCurve.totalPnl >= 0 ? "+" : ""}{equityCurve.totalPnl.toFixed(4)} USDT
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="p-4">
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart
+                data={equityPoints.map((p, i) => ({ ...p, idx: i + 1 }))}
+                margin={{ top: 4, right: 8, left: 0, bottom: 4 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                <XAxis
+                  dataKey="idx"
+                  tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "Space Mono, monospace" }}
+                  tickLine={false}
+                  axisLine={{ stroke: "rgba(255,255,255,0.08)" }}
+                  label={{ value: "Trade #", position: "insideBottomRight", offset: -4, fill: "rgba(255,255,255,0.2)", fontSize: 9 }}
+                />
+                <YAxis
+                  tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "Space Mono, monospace" }}
+                  tickLine={false}
+                  axisLine={{ stroke: "rgba(255,255,255,0.08)" }}
+                  tickFormatter={(v: number) => v.toFixed(2)}
+                  width={60}
+                />
+                <Tooltip content={<EquityTooltip />} />
+                <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 4" />
+                <Line
+                  type="monotone"
+                  dataKey="cumulative"
+                  stroke="#22c55e"
+                  strokeWidth={2}
+                  dot={(props) => {
+                    const { cx, cy, payload } = props;
+                    const color = payload.pnl >= 0 ? "#22c55e" : "#ef4444";
+                    return <circle key={`dot-${payload.idx}`} cx={cx} cy={cy} r={3.5} fill={color} stroke="rgba(0,0,0,0.5)" strokeWidth={1} />;
+                  }}
+                  activeDot={{ r: 5, stroke: "#22c55e", fill: "#111" }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
           </div>
         </div>
       )}
@@ -297,7 +418,7 @@ export function BotPage() {
         <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-5">
 
           {/* Paper Mode Toggle */}
-          <div className="md:col-span-2 flex items-center justify-between p-4 border border-border bg-secondary/30">
+          <div className="flex items-center justify-between p-4 border border-border bg-secondary/30">
             <div>
               <div className="text-sm font-bold mb-0.5">Paper Mode</div>
               <div className="text-xs text-muted-foreground">Simulate trades without placing real orders on Gate.io</div>
@@ -307,6 +428,23 @@ export function BotPage() {
               className={`relative w-12 h-6 rounded-full border transition-colors ${field("paperMode", true) ? "border-violet-500 bg-violet-500/20" : "border-green-500 bg-green-500/20"}`}
             >
               <span className={`absolute top-0.5 w-5 h-5 rounded-full transition-all ${field("paperMode", true) ? "left-0.5 bg-violet-400" : "left-6 bg-green-400"}`} />
+            </button>
+          </div>
+
+          {/* Long Only Toggle */}
+          <div className="flex items-center justify-between p-4 border border-border bg-secondary/30">
+            <div>
+              <div className="text-sm font-bold mb-0.5 flex items-center gap-2">
+                <ArrowUpRight className="w-3.5 h-3.5 text-blue-400" />
+                Long Only
+              </div>
+              <div className="text-xs text-muted-foreground">Skip SHORT signals — safer for spot trading</div>
+            </div>
+            <button
+              onClick={() => set("longOnly", !field("longOnly", false))}
+              className={`relative w-12 h-6 rounded-full border transition-colors ${isLongOnly ? "border-blue-500 bg-blue-500/20" : "border-border bg-secondary"}`}
+            >
+              <span className={`absolute top-0.5 w-5 h-5 rounded-full transition-all ${isLongOnly ? "left-6 bg-blue-400" : "left-0.5 bg-muted-foreground/50"}`} />
             </button>
           </div>
 
@@ -462,6 +600,14 @@ export function BotPage() {
         </div>
       </div>
 
+      {/* Telegram notification hint */}
+      <div className="flex items-start gap-3 border border-border bg-secondary/20 px-4 py-3 text-xs text-muted-foreground">
+        <span className="text-lg leading-none">💬</span>
+        <div>
+          <span className="text-foreground font-bold">Telegram notifications</span> — set <code className="bg-black/30 px-1 text-primary">TELEGRAM_BOT_TOKEN</code> and <code className="bg-black/30 px-1 text-primary">TELEGRAM_CHAT_ID</code> in your Secrets panel to receive trade open/close alerts on your phone.
+        </div>
+      </div>
+
       {/* Test Signal */}
       <div className="border border-border bg-card">
         <div className="px-4 py-3 border-b border-border bg-secondary/30 flex items-center gap-2">
@@ -487,7 +633,7 @@ export function BotPage() {
               className="bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary"
             >
               <option value="LONG">LONG</option>
-              <option value="SHORT">SHORT</option>
+              <option value="SHORT">SHORT {config?.longOnly ? "(blocked)" : ""}</option>
             </select>
           </div>
           <button
@@ -511,7 +657,7 @@ export function BotPage() {
           <table className="w-full text-xs font-mono">
             <thead>
               <tr className="border-b border-border bg-secondary/50">
-                {["TIME", "SYMBOL", "SIDE", "ENTRY", "LIVE", "SL", "TP1", "P&L", "STATUS", ""].map(h => (
+                {["TIME", "SYMBOL", "SIDE", "ENTRY", "LIVE", "SL", "TP1", "P&L", "RETURN", "STATUS", ""].map(h => (
                   <th key={h} className="px-3 py-2.5 text-left text-muted-foreground tracking-widest font-normal whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -519,14 +665,16 @@ export function BotPage() {
             <tbody>
               {!tradesData?.trades?.length && (
                 <tr>
-                  <td colSpan={10} className="px-3 py-10 text-center text-muted-foreground">
+                  <td colSpan={11} className="px-3 py-10 text-center text-muted-foreground">
                     No trades yet. Enable the bot to start executing signals.
                   </td>
                 </tr>
               )}
               {tradesData?.trades?.map(t => {
-                const pnlColor = t.pnl == null ? "" : t.pnl >= 0 ? "text-green-400" : "text-red-400";
+                const pnlVal = t.pnl;
+                const pnlColor = pnlVal == null ? "" : pnlVal >= 0 ? "text-green-400" : "text-red-400";
                 const isOpen = t.status === "open" || t.status === "paper";
+                const retPct = computeReturnPct(t);
                 return (
                   <tr key={t.id} className="border-b border-border/40 hover:bg-secondary/40 transition-colors group">
                     <td className="px-3 py-2 text-muted-foreground">
@@ -535,7 +683,11 @@ export function BotPage() {
                         {timeSince(t.createdAt)}
                       </div>
                     </td>
-                    <td className={`px-3 py-2 font-bold ${t.side === "buy" ? "text-green-400" : "text-red-400"}`}>{t.symbol}</td>
+                    <td className={`px-3 py-2 font-bold`}>
+                      <Link href={`/signal/${t.signalId}`} className={`hover:underline ${t.side === "buy" ? "text-green-400" : "text-red-400"}`}>
+                        {t.symbol}
+                      </Link>
+                    </td>
                     <td className="px-3 py-2">
                       <span className={`flex items-center gap-1 font-bold ${t.side === "buy" ? "text-green-400" : "text-red-400"}`}>
                         {t.side === "buy" ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
@@ -545,7 +697,13 @@ export function BotPage() {
                     <td className="px-3 py-2 text-foreground">{fmt(t.entryPrice)}</td>
                     <td className="px-3 py-2 text-muted-foreground">
                       {isOpen && t.livePrice != null ? (
-                        <span className={t.livePrice !== t.entryPrice ? (t.side === "buy" ? (t.livePrice > (t.entryPrice ?? 0) ? "text-green-400" : "text-red-400") : (t.livePrice < (t.entryPrice ?? 0) ? "text-green-400" : "text-red-400")) : ""}>
+                        <span className={
+                          t.livePrice !== t.entryPrice
+                            ? (t.side === "buy"
+                              ? (t.livePrice > (t.entryPrice ?? 0) ? "text-green-400" : "text-red-400")
+                              : (t.livePrice < (t.entryPrice ?? 0) ? "text-green-400" : "text-red-400"))
+                            : ""
+                        }>
                           {fmt(t.livePrice)}
                         </span>
                       ) : t.closePrice != null ? fmt(t.closePrice) : "—"}
@@ -553,10 +711,17 @@ export function BotPage() {
                     <td className="px-3 py-2 text-red-400">{fmt(t.slPrice)}</td>
                     <td className="px-3 py-2 text-green-400">{fmt(t.tp1Price)}</td>
                     <td className={`px-3 py-2 font-bold ${pnlColor}`}>
-                      {t.pnl != null ? fmtPnl(t.pnl) : "—"}
-                      {t.closeReason && t.closeReason !== "manual" && (
-                        <span className="ml-1 text-muted-foreground font-normal">via {t.closeReason.toUpperCase()}</span>
-                      )}
+                      {pnlVal != null ? (
+                        <span>
+                          {fmtPnl(pnlVal)} USDT
+                          {t.closeReason && t.closeReason !== "manual" && (
+                            <span className="ml-1 text-muted-foreground font-normal text-xs">via {t.closeReason.toUpperCase()}</span>
+                          )}
+                        </span>
+                      ) : "—"}
+                    </td>
+                    <td className={`px-3 py-2 font-bold ${pnlColor}`}>
+                      {retPct != null ? fmtPct(retPct) : "—"}
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-2">

@@ -13,6 +13,8 @@ export const botConfigTable = pgTable("bot_config", {
 
   allowedSymbols: text("allowed_symbols").notNull().default(""),
 
+  longOnly: boolean("long_only").notNull().default(false),
+
   maxOpenTrades: integer("max_open_trades").notNull().default(3),
   cooldownMinutes: integer("cooldown_minutes").notNull().default(0),
 

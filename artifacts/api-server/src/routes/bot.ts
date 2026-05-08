@@ -18,7 +18,7 @@ router.get("/config", async (req, res): Promise<void> => {
 router.put("/config", async (req, res): Promise<void> => {
   const body = req.body as Record<string, unknown>;
   const allowed = [
-    "enabled", "paperMode", "positionSizeUsdt", "minConfW", "minGrade",
+    "enabled", "paperMode", "longOnly", "positionSizeUsdt", "minConfW", "minGrade",
     "allowedSymbols", "maxOpenTrades", "cooldownMinutes",
     "slEnabled", "tp1Enabled", "tp2Enabled", "tp3Enabled",
     "tp1Pct", "tp2Pct", "tp3Pct",
@@ -170,6 +170,54 @@ router.post("/test-signal", async (req, res): Promise<void> => {
   executeSignal(signal).catch((err: unknown) => {
     req.log.error({ err, signalId: signal.id }, "Test signal executor error");
   });
+});
+
+router.get("/equity-curve", async (req, res): Promise<void> => {
+  const closed = await db
+    .select()
+    .from(tradesTable)
+    .where(eq(tradesTable.status, "closed"))
+    .orderBy(tradesTable.closedAt);
+
+  let cumulative = 0;
+  const points = closed
+    .filter((t) => t.closedAt != null && t.pnl != null)
+    .map((t) => {
+      cumulative += t.pnl!;
+      const cost = t.entryPrice != null && t.quantity != null ? t.entryPrice * t.quantity : t.positionSizeUsdt;
+      const returnPct = cost && cost > 0 ? (t.pnl! / cost) * 100 : null;
+      return {
+        date: t.closedAt!.toISOString(),
+        pnl: t.pnl!,
+        cumulative,
+        symbol: t.symbol,
+        closeReason: t.closeReason ?? null,
+        returnPct,
+      };
+    });
+
+  const totalReturnPct =
+    points.length > 0 && points[0].returnPct != null
+      ? points.reduce((sum, p) => sum + (p.returnPct ?? 0), 0)
+      : null;
+
+  res.json({ points, totalPnl: cumulative, totalReturnPct });
+});
+
+// IMPORTANT: must come before /trades/:id so Express doesn't eat "by-signal" as an id param
+router.get("/trades/by-signal/:signalId", async (req, res): Promise<void> => {
+  const signalId = parseInt(req.params.signalId);
+  const [trade] = await db
+    .select()
+    .from(tradesTable)
+    .where(eq(tradesTable.signalId, signalId))
+    .orderBy(desc(tradesTable.createdAt))
+    .limit(1);
+  if (!trade) {
+    res.status(404).json({ error: "No trade for this signal" });
+    return;
+  }
+  res.json(trade);
 });
 
 router.get("/trades", async (req, res): Promise<void> => {

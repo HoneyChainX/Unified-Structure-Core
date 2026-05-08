@@ -10,6 +10,7 @@ export interface BotConfig {
   id: number;
   enabled: boolean;
   paperMode: boolean;
+  longOnly: boolean;
   positionSizeUsdt: number;
   minConfW: number;
   minGrade: string;

@@ -1,10 +1,37 @@
 import { useParams, Link } from "wouter";
-import { useGetSignal, getGetSignalQueryKey, useDeleteSignal } from "@workspace/api-client-react";
-import { ArrowLeft, ArrowUpRight, ArrowDownRight, CheckCircle, XCircle, AlertTriangle } from "lucide-react";
+import {
+  useGetSignal,
+  useDeleteSignal,
+  useGetTradeBySignal,
+  getGetSignalQueryKey,
+  getGetTradeBySignalQueryKey,
+} from "@workspace/api-client-react";
+import {
+  ArrowLeft,
+  ArrowUpRight,
+  ArrowDownRight,
+  CheckCircle,
+  XCircle,
+  AlertTriangle,
+  TrendingUp,
+  TrendingDown,
+  Bot,
+  Clock,
+} from "lucide-react";
 
 function fmt(val: number | null | undefined, decimals = 4) {
   if (val == null) return "—";
   return val.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
+function timeSince(dateStr: string) {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -30,7 +57,7 @@ function Row({ label, value, color }: { label: string; value: React.ReactNode; c
 function GatePill({ pass, label }: { pass: boolean; label: string }) {
   return (
     <div className={`flex items-center gap-2 px-4 py-3 border flex-col ${pass ? "border-green-500/40 bg-green-500/10" : "border-red-500/40 bg-red-500/10"}`}>
-      {pass ? <CheckCircle className={`w-5 h-5 text-green-400`} /> : <XCircle className={`w-5 h-5 text-red-400`} />}
+      {pass ? <CheckCircle className="w-5 h-5 text-green-400" /> : <XCircle className="w-5 h-5 text-red-400" />}
       <span className={`text-xs font-bold tracking-widest ${pass ? "text-green-400" : "text-red-400"}`}>{label}</span>
     </div>
   );
@@ -44,8 +71,135 @@ function LevelBar({ label, price, min, max, color }: { label: string; price: num
       <span className={`w-16 shrink-0 text-right ${color}`}>{label}</span>
       <div className="flex-1 relative h-5 bg-secondary border border-border">
         <div className={`absolute top-0 bottom-0 w-0.5 ${color.replace("text-", "bg-")}`} style={{ left: `${pct}%` }} />
-        <div className={`absolute inset-y-0 left-0 right-0 flex items-center`} style={{ paddingLeft: `${pct}%` }}>
+        <div className="absolute inset-y-0 left-0 right-0 flex items-center" style={{ paddingLeft: `${pct}%` }}>
           <span className={`ml-1 text-xs ${color} whitespace-nowrap`}>{fmt(price)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TradeCard({ signalId }: { signalId: number }) {
+  const { data: trade, isLoading, isError } = useGetTradeBySignal(signalId, {
+    query: {
+      queryKey: getGetTradeBySignalQueryKey(signalId),
+      retry: false,
+      refetchInterval: 15000,
+    }
+  });
+
+  if (isLoading) {
+    return (
+      <div className="border border-border bg-card px-4 py-3 text-xs text-muted-foreground flex items-center gap-2">
+        <Bot className="w-3.5 h-3.5" />
+        Checking for linked trade...
+      </div>
+    );
+  }
+
+  if (isError || !trade) return null;
+
+  const isOpen = trade.status === "open" || trade.status === "paper";
+  const pnlColor = trade.pnl == null ? "" : trade.pnl >= 0 ? "text-green-400" : "text-red-400";
+  const statusColors: Record<string, string> = {
+    open: "border-blue-500/40 text-blue-400 bg-blue-500/10",
+    paper: "border-violet-500/40 text-violet-400 bg-violet-500/10",
+    closed: "border-green-500/40 text-green-400 bg-green-500/10",
+    cancelled: "border-border text-muted-foreground",
+    error: "border-red-500/40 text-red-400 bg-red-500/10",
+  };
+
+  const costBasis =
+    trade.entryPrice != null && trade.quantity != null
+      ? trade.entryPrice * trade.quantity
+      : trade.positionSizeUsdt;
+  const retPct = trade.pnl != null && costBasis && costBasis > 0
+    ? (trade.pnl / costBasis) * 100
+    : null;
+
+  return (
+    <div className="border border-border bg-card">
+      <div className="px-4 py-3 border-b border-border bg-secondary/30 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Bot className="w-3.5 h-3.5 text-primary" />
+          <span className="text-xs text-muted-foreground tracking-widest font-bold">LINKED TRADE</span>
+          {trade.paperMode && (
+            <span className="text-xs text-violet-400 border border-violet-500/30 px-1.5 py-0.5">PAPER</span>
+          )}
+        </div>
+        <Link href="/bot" className="text-xs text-primary hover:underline">View all trades →</Link>
+      </div>
+      <div className="p-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+          <div>
+            <div className="text-xs text-muted-foreground tracking-widest mb-1">SIDE</div>
+            <div className={`flex items-center gap-1.5 font-bold font-mono text-sm ${trade.side === "buy" ? "text-green-400" : "text-red-400"}`}>
+              {trade.side === "buy" ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
+              {trade.side.toUpperCase()}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-muted-foreground tracking-widest mb-1">STATUS</div>
+            <span className={`px-2 py-0.5 border text-xs font-bold ${statusColors[trade.status] ?? "border-border text-muted-foreground"}`}>
+              {trade.status.toUpperCase()}
+            </span>
+          </div>
+          <div>
+            <div className="text-xs text-muted-foreground tracking-widest mb-1">ENTRY</div>
+            <div className="font-mono font-bold text-sm">{fmt(trade.entryPrice)}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted-foreground tracking-widest mb-1">
+              {isOpen ? "LIVE PRICE" : "CLOSE PRICE"}
+            </div>
+            <div className={`font-mono font-bold text-sm ${
+              isOpen && trade.livePrice != null && trade.entryPrice != null
+                ? (trade.side === "buy"
+                  ? (trade.livePrice > trade.entryPrice ? "text-green-400" : "text-red-400")
+                  : (trade.livePrice < trade.entryPrice ? "text-green-400" : "text-red-400"))
+                : ""
+            }`}>
+              {isOpen ? fmt(trade.livePrice) : fmt(trade.closePrice)}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div>
+            <div className="text-xs text-muted-foreground tracking-widest mb-1">SIZE</div>
+            <div className="font-mono text-sm">{trade.positionSizeUsdt != null ? `${trade.positionSizeUsdt.toFixed(2)} USDT` : "—"}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted-foreground tracking-widest mb-1">STOP LOSS</div>
+            <div className="font-mono text-sm text-red-400">{fmt(trade.slPrice)}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted-foreground tracking-widest mb-1">TP1</div>
+            <div className="font-mono text-sm text-green-400">{fmt(trade.tp1Price)}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted-foreground tracking-widest mb-1">P&amp;L</div>
+            <div className={`font-mono font-bold text-sm ${pnlColor}`}>
+              {trade.pnl != null ? (
+                <>
+                  {trade.pnl >= 0 ? "+" : ""}{trade.pnl.toFixed(4)} USDT
+                  {retPct != null && (
+                    <span className="ml-1.5 text-xs">({retPct >= 0 ? "+" : ""}{retPct.toFixed(2)}%)</span>
+                  )}
+                  {trade.closeReason && trade.closeReason !== "manual" && (
+                    <span className="ml-1.5 text-muted-foreground font-normal text-xs">via {trade.closeReason.toUpperCase()}</span>
+                  )}
+                </>
+              ) : "—"}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+          <Clock className="w-3 h-3" />
+          Opened {timeSince(trade.createdAt)}
+          {trade.closedAt && <> · Closed {timeSince(trade.closedAt)}</>}
+          <span className="ml-auto text-xs">Trade #{trade.id}</span>
         </div>
       </div>
     </div>
@@ -87,7 +241,6 @@ export function SignalDetail() {
   const gateCtx = gateBias && !signal.blockReason?.includes("C_FAIL");
   const gateZone = gateCtx && !signal.blockReason?.includes("Z_FAIL");
 
-  // Compute level range for the visual map
   const allLevels = [signal.sl, signal.zoneLow, signal.zoneHigh, signal.tp1, signal.tp2, signal.tp3].filter((v): v is number => v != null);
   const minLevel = allLevels.length ? Math.min(...allLevels) * 0.998 : 0;
   const maxLevel = allLevels.length ? Math.max(...allLevels) * 1.002 : 1;
@@ -132,6 +285,9 @@ export function SignalDetail() {
           )}
         </div>
       </div>
+
+      {/* Linked trade — only shown if signal was triggered and bot may have traded it */}
+      {isTriggered && <TradeCard signalId={id} />}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Confidence */}

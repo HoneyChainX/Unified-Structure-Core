@@ -2,6 +2,7 @@ import { db, tradesTable } from "@workspace/db";
 import { eq, inArray } from "drizzle-orm";
 import { getLivePrice, getSpotOrder, getPriceTriggeredOrder } from "./gateio";
 import { logger } from "../lib/logger";
+import { notifyTradeClosed } from "./notify";
 
 export let lastSyncAt: Date | null = null;
 
@@ -50,6 +51,16 @@ async function syncOpenTrade(trade: typeof tradesTable.$inferSelect): Promise<vo
           closedAt: new Date(),
         }).where(eq(tradesTable.id, id));
         logger.info({ tradeId: id, closeReason, livePrice, pnl: closedPnl }, "Paper trade auto-closed");
+        notifyTradeClosed({
+          symbol: trade.symbol,
+          side: trade.side as "buy" | "sell",
+          entryPrice: trade.entryPrice,
+          closePrice: livePrice,
+          pnl: closedPnl,
+          closeReason,
+          paperMode: true,
+          positionSizeUsdt: trade.positionSizeUsdt,
+        });
       } else {
         await db.update(tradesTable)
           .set({ livePrice, pnl })
@@ -91,6 +102,16 @@ async function syncOpenTrade(trade: typeof tradesTable.$inferSelect): Promise<vo
         }).where(eq(tradesTable.id, id));
 
         logger.info({ tradeId: id, reason, closePrice, pnl }, "Trade closed via price-triggered order fill");
+        notifyTradeClosed({
+          symbol: trade.symbol,
+          side: trade.side as "buy" | "sell",
+          entryPrice: trade.entryPrice,
+          closePrice,
+          pnl,
+          closeReason: reason,
+          paperMode: false,
+          positionSizeUsdt: trade.positionSizeUsdt,
+        });
         return;
       }
     } catch (err) {

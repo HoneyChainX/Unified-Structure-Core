@@ -21,6 +21,7 @@ import type {
   BotConfigPatch,
   BotPerformance,
   BotStatus,
+  EquityCurve,
   HealthStatus,
   ListSignalsParams,
   ListTradesParams,
@@ -933,6 +934,169 @@ export function useListTrades<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getListTradesQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Closed trade equity curve
+ */
+export const getGetEquityCurveUrl = () => {
+  return `/api/bot/equity-curve`;
+};
+
+export const getEquityCurve = async (
+  options?: RequestInit,
+): Promise<EquityCurve> => {
+  return customFetch<EquityCurve>(getGetEquityCurveUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetEquityCurveQueryKey = () => {
+  return [`/api/bot/equity-curve`] as const;
+};
+
+export const getGetEquityCurveQueryOptions = <
+  TData = Awaited<ReturnType<typeof getEquityCurve>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getEquityCurve>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetEquityCurveQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getEquityCurve>>> = ({
+    signal,
+  }) => getEquityCurve({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getEquityCurve>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetEquityCurveQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getEquityCurve>>
+>;
+export type GetEquityCurveQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Closed trade equity curve
+ */
+
+export function useGetEquityCurve<
+  TData = Awaited<ReturnType<typeof getEquityCurve>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getEquityCurve>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetEquityCurveQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get the trade linked to a signal (if any)
+ */
+export const getGetTradeBySignalUrl = (signalId: number) => {
+  return `/api/bot/trades/by-signal/${signalId}`;
+};
+
+export const getTradeBySignal = async (
+  signalId: number,
+  options?: RequestInit,
+): Promise<Trade> => {
+  return customFetch<Trade>(getGetTradeBySignalUrl(signalId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetTradeBySignalQueryKey = (signalId: number) => {
+  return [`/api/bot/trades/by-signal/${signalId}`] as const;
+};
+
+export const getGetTradeBySignalQueryOptions = <
+  TData = Awaited<ReturnType<typeof getTradeBySignal>>,
+  TError = ErrorType<void>,
+>(
+  signalId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getTradeBySignal>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetTradeBySignalQueryKey(signalId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getTradeBySignal>>
+  > = ({ signal }) => getTradeBySignal(signalId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!signalId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getTradeBySignal>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetTradeBySignalQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getTradeBySignal>>
+>;
+export type GetTradeBySignalQueryError = ErrorType<void>;
+
+/**
+ * @summary Get the trade linked to a signal (if any)
+ */
+
+export function useGetTradeBySignal<
+  TData = Awaited<ReturnType<typeof getTradeBySignal>>,
+  TError = ErrorType<void>,
+>(
+  signalId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getTradeBySignal>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetTradeBySignalQueryOptions(signalId, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

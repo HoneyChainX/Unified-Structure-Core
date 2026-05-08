@@ -10,6 +10,8 @@ export * from "./botConfig";
 export * from "./botConfigPatch";
 export * from "./botPerformance";
 export * from "./botStatus";
+export * from "./equityCurve";
+export * from "./equityCurvePoint";
 export * from "./healthStatus";
 export * from "./listSignalsDir";
 export * from "./listSignalsParams";
