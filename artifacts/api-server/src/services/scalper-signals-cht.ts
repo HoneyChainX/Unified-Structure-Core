@@ -14,7 +14,7 @@
  *  9.  Risk Engine         — TP1=1R / TP2=1.5R / TP3=2R; RR ≥ 1 required
  * 10.  Spread Intelligence — BTC relative return + CoinGecko market context
  * 11.  Divergence Engine   — RSI divergence (confidence boost)
- * 12.  TAO Consensus       — 6 experts, ≥ 5 required (raised from 4 per spec §13)
+ * 12.  TAO Consensus       — 6 experts, ≥ 4 required (restored from over-strict ≥5)
  * 13.  Opportunity Score   — 0–100; ELITE(85+)/STRONG(75+)/MEDIUM(60+)/IGNORE
  *
  * Bot trade structure: TP1=30%, TP2=30%, TP3=40%. SL moves to break-even after TP1.
@@ -149,7 +149,8 @@ function volumeScore(volumeRatio: number): number {
   if (volumeRatio >= 1.5) return 1.0;  // EXTREME / VERY STRONG
   if (volumeRatio >= 1.2) return 0.7;  // STRONG
   if (volumeRatio >= 1.0) return 0.4;  // NORMAL
-  return 0.0;                          // WEAK — skip per spec
+  if (volumeRatio >= 0.5) return 0.1;  // QUIET — below avg but not dead
+  return 0.0;                          // DEAD — skip
 }
 
 // ── Trigger Engine (spec §7) ──────────────────────────────────────────────────
@@ -211,7 +212,7 @@ function detectTrigger(
     const nearestLow = recentLows[recentLows.length - 1];
     if (nearestLow) {
       const pct = Math.abs(lastClose - nearestLow.price) / nearestLow.price;
-      if (pct < 0.015 && rsi >= 48 && rsi <= 56 && lastClose > prevClose) {
+      if (pct < 0.015 && rsi >= 40 && rsi <= 62 && lastClose > prevClose) {
         const sl = nearestLow.price - 0.8 * atr;
         return { type: "REVERSAL", sl, triggerQuality: 15 };
       }
@@ -246,7 +247,7 @@ function detectTrigger(
     const nearestHigh = recentHighs[recentHighs.length - 1];
     if (nearestHigh) {
       const pct = Math.abs(lastClose - nearestHigh.price) / nearestHigh.price;
-      if (pct < 0.015 && rsi >= 44 && rsi <= 52 && lastClose < prevClose) {
+      if (pct < 0.015 && rsi >= 38 && rsi <= 60 && lastClose < prevClose) {
         const sl = nearestHigh.price + 0.8 * atr;
         return { type: "REVERSAL", sl, triggerQuality: 15 };
       }
@@ -385,9 +386,12 @@ export function evaluateCHTSignal(
   else                                                     return null;
 
   // ── 3. Volatility Engine ──────────────────────────────────────────────────
+  // ATR% lower bound scales by timeframe: 0.08% for 3m/5m, 0.15% for 15m, 0.3% for 1h+
   const atr    = computeATR(ltfCandles, ATR_PERIOD);
   const atrPct = lastClose > 0 ? (atr / lastClose) * 100 : 0;
-  if (atrPct < 0.3) return null;
+  const tf = params.timeframe ?? "5m";
+  const atrMin = tf === "3m" || tf === "5m" ? 0.08 : tf === "15m" ? 0.15 : 0.3;
+  if (atrPct < atrMin) return null;
   if (atrPct > 8.0) return null;
 
   // ── 4. Volume Engine ──────────────────────────────────────────────────────
@@ -428,13 +432,13 @@ export function evaluateCHTSignal(
     const corrBtc = pearsonCorr(closes.slice(-20), btcCloses.slice(-20));
     if (corrBtc >= 0.9) return null;
 
-    // corr(volume, ROC(close,1), 14) > 0.5 — volume must confirm price moves
+    // corr(volume, ROC(close,1), 14) > 0.2 — loose confirmation; crypto volume often leads/lags
     if (closes.length >= 15 && volumes.length >= 14) {
       const roc = closes.slice(-(14 + 1)).map((c, i, arr) =>
         i === 0 ? 0 : (c - arr[i - 1]) / Math.max(arr[i - 1], 1e-12)
       ).slice(1);
       const corrVolPrice = pearsonCorr(volumes.slice(-14), roc);
-      if (corrVolPrice < 0.5) return null;
+      if (corrVolPrice < 0.2) return null;
     }
   }
 
@@ -466,13 +470,13 @@ export function evaluateCHTSignal(
   // ── 10. Divergence ────────────────────────────────────────────────────────
   const hasDivergence = checkDivergence(closes, side);
 
-  // ── 11. TAO Consensus — threshold ≥ 5 (raised per spec scanning doc §13) ──
+  // ── 11. TAO Consensus — threshold ≥ 4 (original spec §9; ≥5 was too strict in practice) ──
   const taoVotes = computeTaoVotes(side, {
     ema20, ema50, htfBullish, htfBearish,
     volumeRatio, hasDivergence, lastClose,
     rsi, spreadScore,
   });
-  if (taoVotes < 5) return null;
+  if (taoVotes < 4) return null;
 
   // ── 12. Opportunity Score — only emit MEDIUM+ signals ─────────────────────
   const { score, grade } = computeOpportunityScore({
