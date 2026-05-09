@@ -199,6 +199,18 @@ interface BestModeNow {
   tradeCount: number;
   liveSignals: number;
   totalScanned: number;
+  marketFit: number;
+}
+
+interface MarketCondition {
+  regime: "TRENDING_BULL" | "TRENDING_BEAR" | "RANGING" | "VOLATILE" | "NEUTRAL";
+  adx: number;
+  atrPct: number;
+  btcTrend: "BULLISH" | "BEARISH" | "NEUTRAL";
+  label: string;
+  description: string;
+  favoredStrategy: "bb_rsi" | "smc_mss" | "cht";
+  favoredReason: string;
 }
 
 interface ScalperPerformance {
@@ -213,6 +225,7 @@ interface ScalperPerformance {
   worstPnl: number | null;
   strategyStats: StrategyStats[];
   bestModeNow: BestModeNow | null;
+  marketCondition: MarketCondition | null;
 }
 
 interface LiveScanEntry {
@@ -665,36 +678,117 @@ export function ScalperPage() {
             </div>
           )}
 
-          {/* ── Best mode now ── */}
-          {perf.bestModeNow && (() => {
+          {/* ── Market condition + Best mode now ── */}
+          {(perf.marketCondition || perf.bestModeNow) && (() => {
+            const mc = perf.marketCondition;
             const b = perf.bestModeNow;
-            const label = b.strategy === "bb_rsi" ? "BB+RSI" : b.strategy === "smc_mss" ? "SMC MSS+OB" : "CHT ENGINE";
-            const color = b.strategy === "bb_rsi" ? "text-cyan-300 border-cyan-500/50 bg-cyan-500/10" : b.strategy === "smc_mss" ? "text-violet-300 border-violet-500/50 bg-violet-500/10" : "text-amber-300 border-amber-500/50 bg-amber-500/10";
+
+            const regimeColor = !mc ? "text-muted-foreground border-border/40 bg-secondary/20" :
+              mc.regime === "TRENDING_BULL" ? "text-green-300 border-green-500/40 bg-green-500/8" :
+              mc.regime === "TRENDING_BEAR" ? "text-red-300 border-red-500/40 bg-red-500/8" :
+              mc.regime === "RANGING"       ? "text-blue-300 border-blue-500/40 bg-blue-500/8" :
+              mc.regime === "VOLATILE"      ? "text-orange-300 border-orange-500/40 bg-orange-500/8" :
+                                             "text-zinc-300 border-zinc-500/40 bg-zinc-500/8";
+
+            const regimeDot = !mc ? "bg-muted-foreground" :
+              mc.regime === "TRENDING_BULL" ? "bg-green-400" :
+              mc.regime === "TRENDING_BEAR" ? "bg-red-400" :
+              mc.regime === "RANGING"       ? "bg-blue-400" :
+              mc.regime === "VOLATILE"      ? "bg-orange-400" :
+                                             "bg-zinc-400";
+
+            const stratLabel = (s: string) => s === "bb_rsi" ? "BB+RSI" : s === "smc_mss" ? "SMC MSS" : "CHT ENGINE";
+            const stratColor = (s: string) => s === "bb_rsi" ? "text-cyan-300 border-cyan-500/50 bg-cyan-500/10" :
+              s === "smc_mss" ? "text-violet-300 border-violet-500/50 bg-violet-500/10" :
+              "text-amber-300 border-amber-500/50 bg-amber-500/10";
+
+            // Per-strategy market fit scores for display
+            const FIT_TABLE: Record<string, Record<string, number>> = {
+              TRENDING_BULL: { bb_rsi: 20, smc_mss: 100, cht: 85 },
+              TRENDING_BEAR: { bb_rsi: 20, smc_mss: 100, cht: 75 },
+              RANGING:       { bb_rsi: 100, smc_mss: 40, cht: 30 },
+              VOLATILE:      { bb_rsi: 30, smc_mss: 55, cht: 90 },
+              NEUTRAL:       { bb_rsi: 60, smc_mss: 65, cht: 60 },
+            };
+            const fitRow = mc ? FIT_TABLE[mc.regime] : null;
+
             return (
-              <div className="border-t border-border/40 pt-3">
-                <div className="text-xs text-muted-foreground tracking-widest font-bold mb-2">BEST MODE NOW</div>
-                <div className={`border px-3 py-2.5 flex items-center justify-between flex-wrap gap-2 ${color}`}>
-                  <div className="flex items-center gap-2">
-                    <span className="text-yellow-400 text-sm">★</span>
-                    <span className="font-bold tracking-wider text-sm">{label}</span>
-                    <span className="text-xs opacity-70">recommended</span>
+              <div className="border-t border-border/40 pt-3 space-y-2">
+
+                {/* Market condition card */}
+                {mc && (
+                  <div>
+                    <div className="text-xs text-muted-foreground tracking-widest font-bold mb-1.5">MARKET CONDITIONS</div>
+                    <div className={`border px-3 py-2 ${regimeColor}`}>
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className={`inline-block w-2 h-2 rounded-full ${regimeDot}`} />
+                          <span className="font-bold tracking-wider text-sm">{mc.label}</span>
+                        </div>
+                        <div className="flex items-center gap-3 text-xs font-mono opacity-80">
+                          <span>ADX {mc.adx}</span>
+                          <span>ATR {mc.atrPct.toFixed(2)}%</span>
+                          <span className={mc.btcTrend === "BULLISH" ? "text-green-400" : mc.btcTrend === "BEARISH" ? "text-red-400" : "text-zinc-400"}>
+                            BTC {mc.btcTrend}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="text-xs opacity-60 mt-1">{mc.description}</div>
+
+                      {/* Per-strategy fit bars */}
+                      {fitRow && (
+                        <div className="mt-2 grid grid-cols-3 gap-1.5">
+                          {(["bb_rsi", "smc_mss", "cht"] as const).map((s) => {
+                            const fit = fitRow[s] ?? 50;
+                            const isTop = s === mc.favoredStrategy;
+                            const barColor = s === "bb_rsi" ? "bg-cyan-500" : s === "smc_mss" ? "bg-violet-500" : "bg-amber-500";
+                            const labelC = s === "bb_rsi" ? "text-cyan-400" : s === "smc_mss" ? "text-violet-400" : "text-amber-400";
+                            return (
+                              <div key={s} className={`rounded px-1.5 py-1 ${isTop ? "bg-white/5 border border-white/10" : "bg-black/20"}`}>
+                                <div className={`text-[10px] font-bold ${labelC} mb-0.5`}>{stratLabel(s)}</div>
+                                <div className="h-1 bg-white/10 rounded-full overflow-hidden">
+                                  <div className={`h-full ${barColor} rounded-full`} style={{ width: `${fit}%` }} />
+                                </div>
+                                <div className="text-[10px] font-mono text-white/50 mt-0.5">{fit}% fit</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-4 text-xs font-mono">
-                    {b.winRate != null && (
-                      <span className={b.winRate >= 50 ? "text-green-400" : "text-red-400"}>
-                        {b.winRate.toFixed(1)}% win rate ({b.tradeCount} trades)
-                      </span>
-                    )}
-                    {b.totalScanned > 0 && (
-                      <span className="text-yellow-400/80">
-                        {b.liveSignals}/{b.totalScanned} live signals
-                      </span>
-                    )}
-                    {b.winRate == null && b.totalScanned === 0 && (
-                      <span className="opacity-50">no data yet — run a scan first</span>
-                    )}
+                )}
+
+                {/* Best mode now banner */}
+                {b && (
+                  <div>
+                    <div className="text-xs text-muted-foreground tracking-widest font-bold mb-1.5">BEST MODE NOW</div>
+                    <div className={`border px-3 py-2.5 ${stratColor(b.strategy)}`}>
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-yellow-400 text-sm">★</span>
+                          <span className="font-bold tracking-wider text-sm">{stratLabel(b.strategy)}</span>
+                          <span className="text-xs opacity-60">recommended</span>
+                        </div>
+                        <div className="flex items-center gap-3 text-xs font-mono">
+                          {b.winRate != null && (
+                            <span className={b.winRate >= 50 ? "text-green-400" : "text-red-400"}>
+                              {b.winRate.toFixed(1)}% WR ({b.tradeCount})
+                            </span>
+                          )}
+                          {b.totalScanned > 0 && (
+                            <span className="text-yellow-400/80">{b.liveSignals}/{b.totalScanned} live</span>
+                          )}
+                          <span className="text-white/50">fit {b.marketFit}%</span>
+                        </div>
+                      </div>
+                      {mc && mc.favoredStrategy === b.strategy && (
+                        <div className="text-xs opacity-60 mt-1">{mc.favoredReason}</div>
+                      )}
+                      <div className="text-[10px] opacity-40 mt-1">Score = 40% win rate · 30% live signals · 30% market fit</div>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             );
           })()}

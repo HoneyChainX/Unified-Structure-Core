@@ -7,6 +7,7 @@ import { scalperLastSyncAt } from "../services/scalper-sync";
 import { scalperLoopLastRunAt, scalperLoopLastSignalCount, scalperLiveScanResults, scalperLiveScanAt, runScalperScan } from "../services/scalper-loop";
 import { getTopUsdtSymbols, fetchCandles, computeBB, computeRSI, computeVolumeRatio, computeEMA, evaluateSignal } from "../services/scalper-signals";
 import { evaluateSMCSignal } from "../services/scalper-signals-smc";
+import { computeADX, computeATR } from "../services/scalper-signals-cht";
 
 const router = Router();
 
@@ -237,7 +238,120 @@ router.get("/performance", async (req, res): Promise<void> => {
     avgPnl: d.count > 0 ? parseFloat((d.totalPnl / d.count).toFixed(4)) : null,
   })).sort((a, b) => (b.winRate ?? -Infinity) - (a.winRate ?? -Infinity));
 
-  // ── Best mode now: combine historical win rate + live signal detection rate ──
+  // ── Market regime detection from BTC 5m candles ────────────────────────────
+  type Regime = "TRENDING_BULL" | "TRENDING_BEAR" | "RANGING" | "VOLATILE" | "NEUTRAL";
+  interface MarketCondition {
+    regime: Regime;
+    adx: number;
+    atrPct: number;
+    btcTrend: "BULLISH" | "BEARISH" | "NEUTRAL";
+    label: string;
+    description: string;
+    favoredStrategy: "bb_rsi" | "smc_mss" | "cht";
+    favoredReason: string;
+  }
+
+  let marketCondition: MarketCondition | null = null;
+  try {
+    const btcCandles = await fetchCandles("BTC_USDT", "5m", 150);
+    if (btcCandles.length >= 60) {
+      const closes = btcCandles.map((c) => c.close);
+      const lastClose = closes[closes.length - 1];
+      const ema20 = computeEMA(closes, 20);
+      const ema50 = computeEMA(closes, 50);
+      const { adx } = computeADX(btcCandles, 14);
+      const atr = computeATR(btcCandles, 14);
+      const atrPct = lastClose > 0 ? (atr / lastClose) * 100 : 0;
+
+      const btcTrend: MarketCondition["btcTrend"] =
+        ema20 > ema50 * 1.002 ? "BULLISH" : ema20 < ema50 * 0.998 ? "BEARISH" : "NEUTRAL";
+
+      let regime: Regime;
+      if (atrPct > 2.0) {
+        regime = "VOLATILE";
+      } else if (adx >= 22 && btcTrend === "BULLISH") {
+        regime = "TRENDING_BULL";
+      } else if (adx >= 22 && btcTrend === "BEARISH") {
+        regime = "TRENDING_BEAR";
+      } else if (adx < 18) {
+        regime = "RANGING";
+      } else {
+        regime = "NEUTRAL";
+      }
+
+      // Strategy fit per regime (0–1)
+      const REGIME_FIT: Record<Regime, Record<"bb_rsi" | "smc_mss" | "cht", number>> = {
+        TRENDING_BULL: { bb_rsi: 0.20, smc_mss: 1.00, cht: 0.85 },
+        TRENDING_BEAR: { bb_rsi: 0.20, smc_mss: 1.00, cht: 0.75 },
+        RANGING:       { bb_rsi: 1.00, smc_mss: 0.40, cht: 0.30 },
+        VOLATILE:      { bb_rsi: 0.30, smc_mss: 0.55, cht: 0.90 },
+        NEUTRAL:       { bb_rsi: 0.60, smc_mss: 0.65, cht: 0.60 },
+      };
+
+      const fit = REGIME_FIT[regime];
+      const topFit = (Object.entries(fit) as [MarketCondition["favoredStrategy"], number][])
+        .sort((a, b) => b[1] - a[1])[0];
+
+      const REGIME_LABELS: Record<Regime, string> = {
+        TRENDING_BULL: "TRENDING ↑",
+        TRENDING_BEAR: "TRENDING ↓",
+        RANGING: "RANGING",
+        VOLATILE: "HIGH VOLATILITY",
+        NEUTRAL: "NEUTRAL",
+      };
+
+      const REGIME_DESC: Record<Regime, string> = {
+        TRENDING_BULL: `BTC trending up — ADX ${adx.toFixed(0)}, EMA20 > EMA50`,
+        TRENDING_BEAR: `BTC trending down — ADX ${adx.toFixed(0)}, EMA20 < EMA50`,
+        RANGING:       `BTC ranging — ADX ${adx.toFixed(0)} (< 18), price oscillating`,
+        VOLATILE:      `BTC high volatility — ATR ${atrPct.toFixed(2)}%, elevated moves`,
+        NEUTRAL:       `BTC neutral — ADX ${adx.toFixed(0)}, trend unclear`,
+      };
+
+      const FAVORED_REASON: Record<Regime, Record<"bb_rsi" | "smc_mss" | "cht", string>> = {
+        TRENDING_BULL: {
+          bb_rsi:  "Mean reversion underperforms in trends",
+          smc_mss: "Structure breaks & retests thrive in uptrends",
+          cht:     "11-stage trend confirmation suits directional moves",
+        },
+        TRENDING_BEAR: {
+          bb_rsi:  "Mean reversion underperforms in downtrends",
+          smc_mss: "Bearish MSS breakdowns excel in trending down markets",
+          cht:     "CHT trend engine aligned bearish; good structural setups",
+        },
+        RANGING: {
+          bb_rsi:  "Price bounces BB extremes when market oscillates",
+          smc_mss: "Structure breaks often fail in ranging conditions",
+          cht:     "CHT ADX filter blocks most signals in ranging markets",
+        },
+        VOLATILE: {
+          bb_rsi:  "Wide bands reduce signal clarity in volatile conditions",
+          smc_mss: "Structure levels can break false in high-volatility",
+          cht:     "ATR-gated engine filters noise and selects clean setups",
+        },
+        NEUTRAL: {
+          bb_rsi:  "Moderate mean-reversion opportunity in neutral market",
+          smc_mss: "Structural signals remain valid in neutral conditions",
+          cht:     "CHT consensus engine adapts to mixed conditions",
+        },
+      };
+
+      marketCondition = {
+        regime,
+        adx: parseFloat(adx.toFixed(1)),
+        atrPct: parseFloat(atrPct.toFixed(3)),
+        btcTrend,
+        label: REGIME_LABELS[regime],
+        description: REGIME_DESC[regime],
+        favoredStrategy: topFit[0],
+        favoredReason: FAVORED_REASON[regime][topFit[0]],
+      };
+    }
+  } catch {
+    // market condition is optional — skip on error
+  }
+
+  // ── Best mode now: 40% historical win rate + 30% live signals + 30% market fit ──
   const live = scalperLiveScanResults;
   const totalScanned = live.length;
   const liveHits = {
@@ -246,14 +360,32 @@ router.get("/performance", async (req, res): Promise<void> => {
     cht:     live.filter((r) => r.cht.detected).length,
   };
 
+  // Regime fit lookup (default 0.5 if no condition data)
+  const REGIME_FIT_DEFAULT = { bb_rsi: 0.5, smc_mss: 0.5, cht: 0.5 };
+  const regimeFit = marketCondition
+    ? (() => {
+        const REGIME_FIT: Record<string, Record<"bb_rsi" | "smc_mss" | "cht", number>> = {
+          TRENDING_BULL: { bb_rsi: 0.20, smc_mss: 1.00, cht: 0.85 },
+          TRENDING_BEAR: { bb_rsi: 0.20, smc_mss: 1.00, cht: 0.75 },
+          RANGING:       { bb_rsi: 1.00, smc_mss: 0.40, cht: 0.30 },
+          VOLATILE:      { bb_rsi: 0.30, smc_mss: 0.55, cht: 0.90 },
+          NEUTRAL:       { bb_rsi: 0.60, smc_mss: 0.65, cht: 0.60 },
+        };
+        return REGIME_FIT[marketCondition.regime] ?? REGIME_FIT_DEFAULT;
+      })()
+    : REGIME_FIT_DEFAULT;
+
   const ALL_STRATEGIES = ["bb_rsi", "smc_mss", "cht"] as const;
   const bestModeScores = ALL_STRATEGIES.map((strat) => {
     const hist = byStrategy[strat];
-    const histWr = hist ? hist.wins / hist.count : 0;         // 0–1
-    const liveRate = totalScanned > 0 ? liveHits[strat] / totalScanned : 0; // 0–1
-    // Score: 60% historical, 40% live (if no history, 100% live)
+    const histWr = hist ? hist.wins / hist.count : 0;
+    const liveRate = totalScanned > 0 ? liveHits[strat] / totalScanned : 0;
+    const fit = regimeFit[strat];
+    // 40% historical win rate + 30% live signal rate + 30% market regime fit
     const hasHistory = (hist?.count ?? 0) > 0;
-    const score = hasHistory ? histWr * 0.6 + liveRate * 0.4 : liveRate;
+    const score = hasHistory
+      ? histWr * 0.40 + liveRate * 0.30 + fit * 0.30
+      : liveRate * 0.50 + fit * 0.50;
     return {
       strategy: strat,
       score: parseFloat(score.toFixed(4)),
@@ -261,6 +393,7 @@ router.get("/performance", async (req, res): Promise<void> => {
       tradeCount: hist?.count ?? 0,
       liveSignals: liveHits[strat],
       totalScanned,
+      marketFit: parseFloat((fit * 100).toFixed(0)),
     };
   }).sort((a, b) => b.score - a.score);
 
@@ -278,6 +411,7 @@ router.get("/performance", async (req, res): Promise<void> => {
     worstPnl: pnls.length > 0 ? parseFloat(Math.min(...pnls).toFixed(4)) : null,
     strategyStats,
     bestModeNow,
+    marketCondition,
   });
 });
 
