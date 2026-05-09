@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, scalperConfigTable, scalperTradesTable } from "@workspace/db";
 import { eq, desc, count, inArray } from "drizzle-orm";
-import { getUsdtBalance, getLivePrice, cancelPriceTriggeredOrder } from "../services/gateio";
+import { getUsdtBalance, getLivePrice, placeSpotOrder, cancelPriceTriggeredOrder } from "../services/gateio";
 import { scalperLastSyncAt } from "../services/scalper-sync";
 import { scalperLoopLastRunAt, scalperLoopLastSignalCount, runScalperScan } from "../services/scalper-loop";
 import { getTopUsdtSymbols, fetchCandles, computeBB, computeRSI, computeVolumeRatio } from "../services/scalper-signals";
@@ -105,15 +105,68 @@ router.delete("/trades/:id/cancel", async (req, res): Promise<void> => {
     return;
   }
 
+  let exitPrice: number | null = null;
+  let exitError: string | null = null;
+
   if (!trade.paperMode) {
+    // 1. Cancel TP/SL trigger orders so they don't fire after we exit
     const cancelIds = [trade.tpOrderId, trade.slOrderId].filter(Boolean) as string[];
     for (const orderId of cancelIds) {
       try { await cancelPriceTriggeredOrder(parseInt(orderId), trade.gateSymbol); } catch { /* ignore */ }
     }
+
+    // 2. Place a market exit order to close the actual position on Gate.io
+    if (trade.quantity && trade.quantity > 0) {
+      const exitSide = trade.side === "buy" ? "sell" : "buy";
+      try {
+        // For a sell exit: amount = quantity of base currency held
+        // For a buy-back exit (short close): amount = USDT value / price
+        let amount: string;
+        if (exitSide === "sell") {
+          amount = trade.quantity.toFixed(8);
+        } else {
+          const livePrice = await getLivePrice(trade.gateSymbol);
+          amount = (trade.positionSizeUsdt! / livePrice).toFixed(6);
+        }
+        const exitOrder = await placeSpotOrder({
+          currencyPair: trade.gateSymbol,
+          side: exitSide,
+          amount,
+          type: "market",
+        });
+        exitPrice = parseFloat(exitOrder.avg_deal_price || exitOrder.price);
+        req.log.info({ tradeId, gateSymbol: trade.gateSymbol, exitSide, exitPrice }, "Scalper: market exit placed on cancel");
+      } catch (err) {
+        exitError = err instanceof Error ? err.message : String(err);
+        req.log.error({ tradeId, err: exitError }, "Scalper: failed to place exit order on cancel");
+      }
+    }
+  } else {
+    // Paper mode: use live price as exit
+    try {
+      exitPrice = await getLivePrice(trade.gateSymbol);
+    } catch { /* ignore */ }
   }
 
-  await db.update(scalperTradesTable).set({ status: "cancelled", closedAt: new Date() }).where(eq(scalperTradesTable.id, tradeId));
-  res.json({ ok: true });
+  // Compute final P&L if we have an exit price
+  let pnl = trade.pnl ?? null;
+  if (exitPrice != null && trade.entryPrice != null && trade.quantity != null) {
+    if (trade.side === "buy") {
+      pnl = (exitPrice - trade.entryPrice) * trade.quantity;
+    } else {
+      pnl = (trade.entryPrice - exitPrice) * trade.quantity;
+    }
+  }
+
+  await db.update(scalperTradesTable).set({
+    status: "cancelled",
+    closedAt: new Date(),
+    closePrice: exitPrice,
+    closeReason: "manual",
+    pnl: pnl != null ? parseFloat(pnl.toFixed(6)) : null,
+  }).where(eq(scalperTradesTable.id, tradeId));
+
+  res.json({ ok: true, exitPrice, exitError });
 });
 
 // ── Performance ───────────────────────────────────────────────────────────────
