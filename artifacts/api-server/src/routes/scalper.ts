@@ -826,10 +826,10 @@ router.post("/trade/:id/close", async (req, res): Promise<void> => {
   }
 
   // Place an immediate market order to close the spot position
+  const livePrice = await getLivePrice(trade.gateSymbol).catch(() => 0);
   try {
     const closeSide: "buy" | "sell" = trade.side === "buy" ? "sell" : "buy";
     // Use pair-aware precision for the exit amount (e.g. amount_precision=0 pairs need integers)
-    const livePrice = await getLivePrice(trade.gateSymbol).catch(() => 0);
     const exitFmt = await fmtForPair(trade.gateSymbol, livePrice, trade.quantity);
     const closeOrder = await placeSpotOrder({
       currencyPair: trade.gateSymbol,
@@ -859,6 +859,31 @@ router.post("/trade/:id/close", async (req, res): Promise<void> => {
     res.json({ ok: true, closePrice, filledQty, pnl });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+
+    // BALANCE_NOT_ENOUGH means the TP or SL already executed on Gate.io and the asset
+    // is gone — the position is closed. Mark the DB record accordingly using live price.
+    if (msg.includes("BALANCE_NOT_ENOUGH") || msg.includes("balance")) {
+      const closePrice = livePrice || trade.entryPrice || 0;
+      const pnl =
+        trade.entryPrice != null && trade.quantity != null && closePrice > 0
+          ? (trade.side === "buy"
+              ? closePrice - trade.entryPrice
+              : trade.entryPrice - closePrice) * trade.quantity
+          : null;
+
+      await db.update(scalperTradesTable).set({
+        status:      "closed",
+        closePrice,
+        closeReason: "terminal",
+        pnl:         pnl != null ? parseFloat(pnl.toFixed(4)) : null,
+        closedAt:    new Date(),
+      }).where(eq(scalperTradesTable.id, tradeId));
+
+      req.log.warn({ tradeId, closePrice, pnl }, "Scalper: force close — balance already gone (TP/SL filled), trade auto-closed at live price");
+      res.json({ ok: true, closePrice, filledQty: trade.quantity, pnl, note: "Position was already closed on Gate.io (TP/SL executed). Record updated." });
+      return;
+    }
+
     req.log.error({ tradeId, err: msg }, "Scalper: force close failed");
     res.status(502).json({ error: msg });
   }

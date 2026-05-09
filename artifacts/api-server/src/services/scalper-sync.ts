@@ -467,7 +467,13 @@ async function syncStandardTrade(trade: typeof scalperTradesTable.$inferSelect):
             actualClose = parseFloat(exitOrder.avg_deal_price || livePrice.toString());
             logger.info({ tradeId: id, closeReason, actualClose }, "Scalper: fallback exit placed");
           } catch (exitErr) {
-            logger.error({ tradeId: id, exitErr }, "Scalper: fallback exit FAILED");
+            const exitMsg = exitErr instanceof Error ? exitErr.message : String(exitErr);
+            if (exitMsg.includes("BALANCE_NOT_ENOUGH") || exitMsg.includes("balance")) {
+              // Asset already sold by TP/SL — position is closed, no sell needed
+              logger.warn({ tradeId: id, closeReason }, "Scalper: fallback sell skipped — balance already gone (TP/SL filled)");
+            } else {
+              logger.error({ tradeId: id, exitErr }, "Scalper: fallback exit FAILED");
+            }
           }
         }
 
@@ -485,6 +491,51 @@ async function syncStandardTrade(trade: typeof scalperTradesTable.$inferSelect):
         logger.warn({ tradeId: id, closeReason, closePrice: actualClose }, "Scalper: live closed via price fallback");
         if (pnl != null) await updateScalperCompoundBalance(pnl);
         return;
+      }
+
+      // Price is between SL and TP — but if all orders are terminal (not found), the
+      // position was likely already closed by Gate.io. Try a market sell to confirm;
+      // if BALANCE_NOT_ENOUGH, the asset is gone — mark as closed at live price.
+      if (allOrdersTerminal && quantity != null && quantity > 0) {
+        try {
+          const exitFmt = await fmtForPair(gateSymbol, livePrice, quantity);
+          const exitOrder = await placeSpotOrder({
+            currencyPair: gateSymbol,
+            side: side === "buy" ? "sell" : "buy",
+            amount: exitFmt.amount, type: "market",
+          });
+          const actualClose = parseFloat(exitOrder.avg_deal_price || livePrice.toString());
+          const pnl =
+            entryPrice != null
+              ? (side === "buy" ? actualClose - entryPrice : entryPrice - actualClose) * quantity
+              : null;
+          await db.update(scalperTradesTable).set({
+            status: "closed", livePrice, closePrice: actualClose, closeReason: "terminal",
+            pnl: pnl != null ? parseFloat(pnl.toFixed(4)) : null,
+            closedAt: new Date(),
+          }).where(eq(scalperTradesTable.id, id));
+          logger.warn({ tradeId: id, actualClose, pnl }, "Scalper: terminal orders — emergency exit placed, trade closed");
+          if (pnl != null) await updateScalperCompoundBalance(pnl);
+          return;
+        } catch (exitErr) {
+          const exitMsg = exitErr instanceof Error ? exitErr.message : String(exitErr);
+          if (exitMsg.includes("BALANCE_NOT_ENOUGH") || exitMsg.includes("balance")) {
+            // Already sold — close at live price with best-effort P&L estimate
+            const pnl =
+              entryPrice != null
+                ? (side === "buy" ? livePrice - entryPrice : entryPrice - livePrice) * quantity
+                : null;
+            await db.update(scalperTradesTable).set({
+              status: "closed", livePrice, closePrice: livePrice, closeReason: "terminal",
+              pnl: pnl != null ? parseFloat(pnl.toFixed(4)) : null,
+              closedAt: new Date(),
+            }).where(eq(scalperTradesTable.id, id));
+            logger.warn({ tradeId: id, livePrice, pnl }, "Scalper: terminal orders — balance gone, trade auto-closed at live price");
+            if (pnl != null) await updateScalperCompoundBalance(pnl);
+            return;
+          }
+          logger.error({ tradeId: id, exitErr: exitMsg }, "Scalper: terminal emergency exit failed (transient)");
+        }
       }
 
       const pnl =
