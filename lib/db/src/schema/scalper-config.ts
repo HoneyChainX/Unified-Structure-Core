@@ -52,6 +52,14 @@ export const scalperConfigTable = pgTable("scalper_config", {
   // Dynamic TP — when true, executor targets the opposite Bollinger Band instead of a fixed $ or % amount
   dynamicTp: boolean("dynamic_tp").notNull().default(false),
 
+  // TP mode — controls how take-profit is calculated:
+  //   "fixed_usdt"  — single TP at fixed $ target (targetProfitUsdt)
+  //   "fixed_pct"   — single TP at fixed % of entry (targetProfitPct)
+  //   "dynamic_bb"  — TP at opposite Bollinger Band (dynamicTp)
+  //   "micro_2usd"  — dual-TP sniper mode: position auto-sized so 1R = targetProfitUsdt ($2 default)
+  //                   TP1 at entry+1R (50% qty → $1), break-even SL; TP2 at entry+2R (50% qty → $1 more)
+  tpMode: text("tp_mode").notNull().default("fixed_usdt"),
+
   // TradingView webhook secret — auto-generated UUID on first GET /config
   webhookSecret: text("webhook_secret"),
 

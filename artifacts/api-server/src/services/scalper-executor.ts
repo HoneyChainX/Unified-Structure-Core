@@ -122,9 +122,51 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
   }
 
   const entryPrice = signal.entryPrice;
-  const quantity   = positionSize / entryPrice;
-
   const isCht = signal.strategy === "cht" && signal.tp1Price != null && signal.tp2Price != null && signal.tp3Price != null;
+
+  // ── Micro $2 mode: auto-size position so 1R = targetProfitUsdt ───────────
+  const isMicro = (config as { tpMode?: string }).tpMode === "micro_2usd";
+
+  let quantity: number;
+  let microSlDist: number | null = null;
+  let microTp1: number | null = null;
+  let microTp2: number | null = null;
+
+  if (isMicro) {
+    // Derive SL distance from signal or config slPct fallback
+    if (signal.slPrice != null) {
+      microSlDist = Math.abs(entryPrice - signal.slPrice);
+    } else {
+      microSlDist = entryPrice * (config.slPct / 100);
+    }
+
+    if (microSlDist <= 0) {
+      const msg = "Micro mode: SL distance is zero — cannot size position";
+      logger.warn({ symbol: signal.gateSymbol }, msg);
+      await db.update(scalperTradesTable).set({ status: "error", errorMessage: msg }).where(eq(scalperTradesTable.id, (await db.insert(scalperTradesTable).values({ symbol: signal.symbol, gateSymbol: signal.gateSymbol, side: signal.side, positionSizeUsdt: 0, paperMode: config.paperMode, strategy: "micro_2usd", status: "pending" }).returning())[0].id));
+      return msg;
+    }
+
+    const targetPnl = config.targetProfitUsdt ?? 2;   // default $2
+    quantity    = targetPnl / microSlDist;             // 1R = $targetPnl
+    positionSize = quantity * entryPrice;
+
+    // Cap position at $1000 to prevent runaway sizing on tiny SL
+    if (positionSize > 1000) {
+      positionSize = 1000;
+      quantity = positionSize / entryPrice;
+    }
+
+    const dir = signal.side === "buy" ? 1 : -1;
+    microTp1 = entryPrice + dir * 1.0 * microSlDist;  // 1R → $targetPnl/2 per 50% exit
+    microTp2 = entryPrice + dir * 2.0 * microSlDist;  // 2R → $targetPnl/2 per 50% exit
+    logger.info(
+      { symbol: signal.gateSymbol, slDist: microSlDist, qty: quantity, positionSize, tp1: microTp1, tp2: microTp2 },
+      "Micro mode: position sized",
+    );
+  } else {
+    quantity = positionSize / entryPrice;
+  }
 
   /** Compute TP/SL from a given fill price, honouring signal geometry first, then config. */
   function computeTpSl(fillPrice: number, fillQty: number): { tp: number; sl: number } {
@@ -152,7 +194,12 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     return { tp, sl };
   }
 
-  const provisional = computeTpSl(entryPrice, quantity);
+  const provisional = isMicro
+    ? {
+        sl: signal.slPrice ?? (entryPrice - (signal.side === "buy" ? 1 : -1) * (microSlDist ?? 0)),
+        tp: microTp2 ?? entryPrice,
+      }
+    : computeTpSl(entryPrice, quantity);
 
   // Common fields stored on every trade row
   const sharedFields = {
@@ -168,10 +215,16 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     rsi:            signal.rsi,
     volumeRatio:    signal.volumeRatio,
     paperMode:      config.paperMode,
-    strategy:       signal.strategy ?? null,
-    // CHT multi-TP prices (null for other strategies)
-    tp1Price:       isCht ? parseFloat(signal.tp1Price!.toFixed(8)) : undefined,
-    tp2Price:       isCht ? parseFloat(signal.tp2Price!.toFixed(8)) : undefined,
+    // Micro mode tags trade as "micro_2usd"; CHT keeps "cht"; others keep signal strategy
+    strategy:       isMicro ? "micro_2usd" : (signal.strategy ?? null),
+    // Micro mode: tp1/tp2 hold the two TP tiers; tp3 unused
+    // CHT mode: tp1/tp2/tp3 hold 1R/1.5R/2R tiers
+    tp1Price:       isMicro
+                      ? parseFloat((microTp1 ?? 0).toFixed(8))
+                      : isCht ? parseFloat(signal.tp1Price!.toFixed(8)) : undefined,
+    tp2Price:       isMicro
+                      ? parseFloat((microTp2 ?? 0).toFixed(8))
+                      : isCht ? parseFloat(signal.tp2Price!.toFixed(8)) : undefined,
     tp3Price:       isCht ? parseFloat(signal.tp3Price!.toFixed(8)) : undefined,
   };
 
@@ -189,7 +242,35 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       logger.warn({ tradeId: trade.id, err }, "Scalper paper: using signal price as fallback");
     }
 
-    const qty = positionSize / livePrice;
+    const qty = isMicro ? positionSize / livePrice : positionSize / livePrice;
+
+    // For Micro mode: recalculate 2-TP levels at actual fill price
+    if (isMicro) {
+      const actualSlDist = signal.slPrice != null
+        ? Math.abs(livePrice - signal.slPrice)
+        : livePrice * (config.slPct / 100);
+      const actualSl = signal.slPrice ?? (livePrice - (signal.side === "buy" ? 1 : -1) * actualSlDist);
+      const dir = signal.side === "buy" ? 1 : -1;
+      const mTp1 = livePrice + dir * 1.0 * actualSlDist;
+      const mTp2 = livePrice + dir * 2.0 * actualSlDist;
+
+      await db.update(scalperTradesTable).set({
+        status: "paper", entryPrice: livePrice, livePrice,
+        quantity: parseFloat(qty.toFixed(8)),
+        tpPrice:  parseFloat(mTp2.toFixed(8)),
+        slPrice:  parseFloat(actualSl.toFixed(8)),
+        tp1Price: parseFloat(mTp1.toFixed(8)),
+        tp2Price: parseFloat(mTp2.toFixed(8)),
+        pnl: 0,
+      }).where(eq(scalperTradesTable.id, trade.id));
+
+      logger.info(
+        { tradeId: trade.id, symbol: signal.symbol, livePrice, positionSize: qty * livePrice, tp1: mTp1, tp2: mTp2, sl: actualSl },
+        "Micro paper trade recorded",
+      );
+      return null;
+    }
+
     const { tp: paperTp, sl: paperSl } = computeTpSl(livePrice, qty);
 
     // For CHT, recalculate the 3-TP prices at actual fill price
@@ -256,39 +337,52 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     const filledPrice = parseFloat(entryOrder.avg_deal_price || entryOrder.price);
     const filledQty   = parseFloat(entryOrder.filled_amount || entryOrder.amount);
 
-    // Recompute actual TP/SL at fill price
+    // ── Micro mode: recalculate 2-TP levels at actual fill price ─────────
+    const actualSlDist = signal.slPrice != null
+      ? Math.abs(filledPrice - signal.slPrice)
+      : filledPrice * (config.slPct / 100);
+    const dir = signal.side === "buy" ? 1 : -1;
+
     let actualTp: number;
-    if (config.dynamicTp) {
+    let actualSl: number;
+    let micro2TpPrices: { tp1Price?: number; tp2Price?: number } = {};
+
+    if (isMicro) {
+      actualSl = signal.slPrice ?? (filledPrice - dir * actualSlDist);
+      const mTp1 = filledPrice + dir * 1.0 * actualSlDist;
+      const mTp2 = filledPrice + dir * 2.0 * actualSlDist;
+      actualTp  = mTp2;
+      micro2TpPrices = {
+        tp1Price: parseFloat(mTp1.toFixed(8)),
+        tp2Price: parseFloat(mTp2.toFixed(8)),
+      };
+    } else if (config.dynamicTp) {
       actualTp = signal.side === "buy" ? signal.bbUpper : signal.bbLower;
+      actualSl = signal.slPrice ?? (filledPrice - dir * actualSlDist);
     } else if (signal.tpPrice != null) {
       actualTp = signal.tpPrice;
+      actualSl = signal.slPrice ?? (filledPrice - dir * actualSlDist);
     } else if (config.targetProfitPct != null && config.targetProfitPct > 0) {
       const tpMove = filledPrice * (config.targetProfitPct / 100);
       actualTp = signal.side === "buy" ? filledPrice + tpMove : filledPrice - tpMove;
+      actualSl = signal.slPrice ?? (filledPrice - dir * actualSlDist);
     } else {
       const tpMove = config.targetProfitUsdt / filledQty;
       actualTp = signal.side === "buy" ? filledPrice + tpMove : filledPrice - tpMove;
-    }
-
-    let actualSl: number;
-    if (signal.slPrice != null) {
-      actualSl = signal.slPrice;
-    } else {
-      const slMove = filledPrice * (config.slPct / 100);
-      actualSl = signal.side === "buy" ? filledPrice - slMove : filledPrice + slMove;
+      actualSl = signal.slPrice ?? (filledPrice - dir * actualSlDist);
     }
 
     // Recalculate CHT TPs at actual fill if slPrice available
     let cht3TpPrices: { tp1Price?: number; tp2Price?: number; tp3Price?: number } = {};
-    if (isCht && signal.slPrice != null) {
+    if (!isMicro && isCht && signal.slPrice != null) {
       const slDist = Math.abs(filledPrice - signal.slPrice);
       if (slDist > 0) {
-        const dir = signal.side === "buy" ? 1 : -1;
-        actualTp = filledPrice + dir * 1.5 * slDist;     // TP2 is primary
+        const d = signal.side === "buy" ? 1 : -1;
+        actualTp = filledPrice + d * 1.5 * slDist;     // TP2 is primary
         cht3TpPrices = {
-          tp1Price: parseFloat((filledPrice + dir * 1.0 * slDist).toFixed(8)),
+          tp1Price: parseFloat((filledPrice + d * 1.0 * slDist).toFixed(8)),
           tp2Price: parseFloat(actualTp.toFixed(8)),
-          tp3Price: parseFloat((filledPrice + dir * 2.0 * slDist).toFixed(8)),
+          tp3Price: parseFloat((filledPrice + d * 2.0 * slDist).toFixed(8)),
         };
       }
     }
@@ -301,17 +395,78 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       tpPrice:      parseFloat(actualTp.toFixed(8)),
       slPrice:      parseFloat(actualSl.toFixed(8)),
       ...cht3TpPrices,
+      ...micro2TpPrices,
       status: "open",
       pnl:    0,
     }).where(eq(scalperTradesTable.id, trade.id));
 
-    logger.info({ tradeId: trade.id, filledPrice, filledQty, tpPrice: actualTp, slPrice: actualSl, strategy: signal.strategy }, "Scalper: entry filled");
+    logger.info({ tradeId: trade.id, filledPrice, filledQty, tpPrice: actualTp, slPrice: actualSl, strategy: isMicro ? "micro_2usd" : signal.strategy }, "Scalper: entry filled");
 
     const orderUpdates: Record<string, string | undefined> = {};
     const orderErrors: string[] = [];
 
+    // ── Micro $2 mode: 2 TP orders (50%/50%) + 1 full-position SL ────────
+    if (isMicro && micro2TpPrices.tp1Price && micro2TpPrices.tp2Price) {
+      const q1 = filledQty * 0.50;
+      const q2 = filledQty * 0.50;
+      const triggerRule = signal.side === "buy" ? ">=" : "<=";
+      const slRule      = signal.side === "buy" ? "<=" : ">=";
+      const exitSide    = signal.side === "buy" ? "sell" : "buy";
+
+      const [fmtTp1, fmtTp2, fmtSl] = await Promise.all([
+        fmtForPair(signal.gateSymbol, micro2TpPrices.tp1Price, q1),
+        fmtForPair(signal.gateSymbol, micro2TpPrices.tp2Price, q2),
+        fmtForPair(signal.gateSymbol, actualSl, filledQty),
+      ]);
+
+      // TP1 (1R, 50%)
+      try {
+        const o = await placePriceTriggeredOrder({
+          currencyPair: signal.gateSymbol,
+          triggerPrice: fmtTp1.price, triggerRule,
+          side: exitSide, amount: fmtTp1.amount, orderPrice: fmtTp1.price,
+        });
+        orderUpdates.tp1OrderId = o.id.toString();
+        logger.info({ tradeId: trade.id, tp1OrderId: o.id, price: fmtTp1.price }, "Micro: TP1 order placed");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        orderErrors.push(`TP1: ${msg}`);
+        logger.warn({ tradeId: trade.id, err: msg }, "Micro: TP1 order failed");
+      }
+
+      // TP2 (2R, 50%)
+      try {
+        const o = await placePriceTriggeredOrder({
+          currencyPair: signal.gateSymbol,
+          triggerPrice: fmtTp2.price, triggerRule,
+          side: exitSide, amount: fmtTp2.amount, orderPrice: fmtTp2.price,
+        });
+        orderUpdates.tp2OrderId = o.id.toString();
+        logger.info({ tradeId: trade.id, tp2OrderId: o.id, price: fmtTp2.price }, "Micro: TP2 order placed");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        orderErrors.push(`TP2: ${msg}`);
+        logger.warn({ tradeId: trade.id, err: msg }, "Micro: TP2 order failed");
+      }
+
+      // SL — market order covering 100% until TP1 fires, then sync shrinks it
+      try {
+        const o = await placePriceTriggeredOrder({
+          currencyPair: signal.gateSymbol,
+          triggerPrice: fmtSl.price, triggerRule: slRule,
+          side: exitSide, amount: fmtSl.amount,
+          orderPrice: "0", orderType: "market",
+        });
+        orderUpdates.slOrderId = o.id.toString();
+        logger.info({ tradeId: trade.id, slOrderId: o.id, price: fmtSl.price }, "Micro: SL order placed");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        orderErrors.push(`SL: ${msg}`);
+        logger.warn({ tradeId: trade.id, err: msg }, "Micro: SL order failed");
+      }
+
     // ── CHT: 3 TP orders + 1 SL covering full position ───────────────────
-    if (isCht && cht3TpPrices.tp1Price && cht3TpPrices.tp2Price && cht3TpPrices.tp3Price) {
+    } else if (isCht && cht3TpPrices.tp1Price && cht3TpPrices.tp2Price && cht3TpPrices.tp3Price) {
       const q1 = filledQty * 0.30;
       const q2 = filledQty * 0.30;
       const q3 = filledQty * 0.40;

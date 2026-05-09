@@ -1,0 +1,646 @@
+# CHT ENGINE — REPLIT AI FULL IMPLEMENTATION PROMPT
+
+## Autonomous Micro-Profit Crypto Bot ($2 Target Mode)
+
+## LONG ONLY — SPOT ONLY
+
+You are building a production-grade autonomous crypto trading bot called:
+
+# CHT ENGINE
+
+(Crypto Hybrid Trading Engine)
+
+The bot objective is:
+
+```text
+Generate small, fast, consistent profits (~$2 target per trade)
+using high-probability LONG-only SPOT scalping logic.
+```
+
+IMPORTANT:
+
+* This is NOT a swing trading bot.
+* This is NOT a leverage bot.
+* This is NOT a futures bot.
+* This is NOT a gambling bot.
+* This bot prioritizes:
+
+  * high winrate
+  * fast exits
+  * low exposure
+  * strict filtering
+  * capital protection
+
+========================================================
+CORE STRATEGY PHILOSOPHY
+========================
+
+The bot MUST ONLY trade when ALL conditions align:
+
+```text
+Trend
++
+Fresh Structure
++
+Retest Confirmation
++
+Volume Confirmation
++
+Healthy Volatility
++
+Low Noise Market
++
+Good Risk
+```
+
+The bot should behave like a sniper.
+NO overtrading.
+
+========================================================
+PRIMARY OBJECTIVE
+=================
+
+Target:
+
+```text
+~$2 profit per completed trade cycle
+```
+
+Primary priorities:
+
+1. High probability entries
+2. Fast TP hit
+3. Small controlled losses
+4. Tight stop losses
+5. Short holding times
+
+========================================================
+TECH STACK
+==========
+
+Build using:
+
+Backend:
+
+* Python 3.11+
+
+Libraries:
+
+* ccxt
+* pandas
+* numpy
+* asyncio
+* ta (technical analysis)
+* websockets
+* fastapi (optional dashboard API)
+
+Storage:
+
+* SQLite initially
+* architecture compatible with PostgreSQL later
+
+Exchange:
+
+* Binance Spot API
+
+========================================================
+BOT ARCHITECTURE
+================
+
+Create modular architecture:
+
+```text
+/core
+    config.py
+    state.py
+    logger.py
+
+/market
+    data_feed.py
+    websocket_feed.py
+    symbol_scanner.py
+
+/engines
+    trend_engine.py
+    structure_engine.py
+    trigger_engine.py
+    volume_engine.py
+    volatility_engine.py
+    spread_engine.py
+    risk_engine.py
+    scoring_engine.py
+    execution_engine.py
+    position_manager.py
+
+/database
+    models.py
+    storage.py
+
+/utils
+    indicators.py
+    time_utils.py
+    math_utils.py
+
+/main.py
+```
+
+========================================================
+MARKETS TO TRADE
+================
+
+Trade ONLY:
+
+* BTCUSDT
+* ETHUSDT
+* SOLUSDT
+* BNBUSDT
+
+Optional:
+
+* LINKUSDT
+* AVAXUSDT
+
+DO NOT TRADE:
+
+* low liquidity assets
+* meme coins
+* highly manipulated pairs
+
+========================================================
+TIMEFRAMES
+==========
+
+Primary execution TF:
+
+* 1m
+* 3m
+* 5m
+
+Higher timeframe confirmation:
+
+* 15m
+* 1h
+
+========================================================
+STRATEGY LOGIC
+==============
+
+========================
+
+1. TREND ENGINE
+   ========================
+
+Use:
+
+* EMA20
+* EMA50
+* ADX14
+
+LONG TREND VALID IF:
+
+```python
+ema20 > ema50
+and adx > 18
+```
+
+Reject if:
+
+* ADX < 18
+* EMA20 flat
+* price repeatedly crossing EMA20
+
+========================================================
+2. STRUCTURE ENGINE
+===================
+
+Detect:
+
+* Swing highs/lows
+* MSS
+* BOS
+* Fresh breakouts
+
+BULLISH MSS:
+
+```python
+close > confirmed_swing_high
+```
+
+VALID BREAKOUT:
+
+* candle closes beyond level
+* body > 40% candle range
+* volume confirmed
+
+ONLY trade:
+
+```text
+fresh structures
+```
+
+Avoid extended trends.
+
+========================================================
+3. ENTRY MODEL (CRITICAL)
+=========================
+
+NEVER chase breakouts.
+
+ONLY enter AFTER:
+
+* breakout
+* pullback/retest
+* bullish rejection candle
+
+ENTRY FLOW:
+
+1. breakout detected
+2. pullback into:
+
+   * EMA20 zone
+     OR
+   * breakout level
+3. bullish rejection candle
+4. close confirmation
+5. volume confirmation
+6. execute
+
+========================================================
+4. CONFIRMATION CANDLE RULES
+============================
+
+Bullish confirmation candle should have:
+
+* lower wick
+* bullish close
+* close above midpoint
+* preferably engulfing
+
+========================================================
+5. VOLUME ENGINE
+================
+
+Require:
+
+```python
+volume > sma(volume, 20)
+```
+
+Preferred:
+
+```python
+volume > sma(volume,20) * 1.5
+```
+
+Reject weak volume setups.
+
+========================================================
+6. VOLATILITY ENGINE
+====================
+
+Use ATR14.
+
+Compute:
+
+```python
+atr_pct = atr / close * 100
+```
+
+VALID:
+
+```python
+0.3 < atr_pct < 4
+```
+
+Reject:
+
+* dead markets
+* panic volatility
+
+========================================================
+7. SPREAD INTELLIGENCE ENGINE
+=============================
+
+Implement these equations exactly:
+
+```python
+spread_alt_rot =
+log(total3exbtc / btc_cap)
+-
+sma(log(total3exbtc / btc_cap), L)
+
+spread_x_btc =
+log(close / btc_usd)
+-
+sma(log(close / btc_usd), L)
+
+spread_stable =
+log((usdt_cap + usdc_cap) / total3)
+-
+sma(log((usdt_cap + usdc_cap) / total3), L)
+
+spread_score =
+0.4 * spread_alt_rot
++ 0.3 * spread_x_btc
++ 0.3 * spread_stable
+```
+
+Interpretation:
+
+Positive spread:
+
+* bullish liquidity rotation
+
+Negative spread:
+
+* defensive environment
+
+========================================================
+8. ENTRY FILTERS
+================
+
+DO NOT ENTER IF:
+
+* ADX < 18
+* ATR invalid
+* weak volume
+* spread negative
+* structure not fresh
+* price extended too far above EMA20
+* market choppy
+
+========================================================
+9. RISK ENGINE
+==============
+
+Use VERY TIGHT stop losses.
+
+LONG SL:
+
+```python
+below rejection wick
+```
+
+DO NOT use huge ATR stops.
+
+========================================================
+10. TAKE PROFIT LOGIC
+=====================
+
+PRIMARY OBJECTIVE:
+Fast small profits.
+
+TP MODEL:
+
+TP1:
+
+```python
+0.5R
+```
+
+TP2:
+
+```python
+1R
+```
+
+After TP1:
+
+* move SL to breakeven
+* close 50%-70%
+
+Keep small runner only.
+
+========================================================
+11. POSITION SIZING
+===================
+
+Risk model:
+
+* fixed % risk per trade
+
+Example:
+
+```python
+0.5% - 1% risk
+```
+
+Target:
+
+```text
+~$2 expected profit
+```
+
+Position sizing should adapt automatically.
+
+========================================================
+12. TIMEOUT LOGIC
+=================
+
+CRITICAL RULE:
+
+If trade does NOT move quickly:
+EXIT.
+
+Auto-close if:
+
+* momentum dies
+* volume collapses
+* no progress after 5-10 candles
+
+========================================================
+13. EXECUTION ENGINE
+====================
+
+Use:
+
+* LIMIT entries preferred
+* MARKET fallback allowed
+
+Must support:
+
+* partial TP
+* break-even SL
+* trailing stop optional
+
+========================================================
+14. SCORING ENGINE
+==================
+
+Use these weights:
+
+| Factor              | Weight |
+| ------------------- | ------ |
+| Entry Precision     | 30     |
+| Trend Alignment     | 20     |
+| Volume Quality      | 20     |
+| Structure Freshness | 15     |
+| Volatility Quality  | 10     |
+| Spread Quality      | 5      |
+
+TOTAL = 100
+
+========================================================
+15. SIGNAL CLASSIFICATION
+=========================
+
+85+:
+ELITE
+
+75-84:
+STRONG
+
+60-74:
+MEDIUM
+
+<60:
+IGNORE
+
+ONLY execute:
+
+```python
+score >= 75
+```
+
+========================================================
+16. POSITION MANAGEMENT
+=======================
+
+Bot must:
+
+* monitor active trades
+* update SL
+* manage TP
+* detect invalidation
+* close stale positions
+
+========================================================
+17. INVALIDATION RULES
+======================
+
+Exit immediately if:
+
+* trend weakens
+* opposite structure appears
+* volume collapses
+* ATR regime invalidates
+* spread score turns strongly negative
+
+========================================================
+18. DATABASE REQUIREMENTS
+=========================
+
+Store:
+
+* candles
+* signals
+* executed trades
+* pnl
+* winrate
+* score history
+* spread history
+
+========================================================
+19. LOGGING
+===========
+
+Implement professional logging.
+
+Log:
+
+* entries
+* exits
+* reasons
+* scores
+* SL/TP changes
+* invalidations
+* API errors
+
+========================================================
+20. SAFETY RULES
+================
+
+NEVER:
+
+* open duplicate trades
+* exceed exposure limits
+* trade without SL
+* revenge trade
+* average down
+* trade low liquidity assets
+
+========================================================
+21. PERFORMANCE GOALS
+=====================
+
+Target:
+
+* high winrate
+* low drawdown
+* fast trade completion
+
+Preferred:
+
+* 70%+ winrate
+* short holding time
+* low exposure
+
+========================================================
+22. BUILD REQUIREMENTS
+======================
+
+The code must be:
+
+* modular
+* production-ready
+* scalable
+* async where appropriate
+* well-commented
+* optimized
+* easy to extend
+
+========================================================
+23. FINAL IMPLEMENTATION REQUIREMENT
+====================================
+
+Build a COMPLETE WORKING BOT including:
+
+* scanner
+* signal generation
+* execution
+* position management
+* logging
+* scoring
+* spread engine
+* risk engine
+* database integration
+
+The final system should operate autonomously 24/7.
+
+========================================================
+24. MASTER RULE
+===============
+
+DO NOT TRADE BECAUSE PRICE MOVES.
+
+TRADE ONLY WHEN:
+trend
++
+fresh structure
++
+retest confirmation
++
+volume
++
+volatility
++
+risk
++
+spread conditions
+
+ALL ALIGN TOGETHER.
+
+========================================================
+
+```
+```

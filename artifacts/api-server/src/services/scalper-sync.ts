@@ -511,10 +511,216 @@ async function syncStandardTrade(trade: typeof scalperTradesTable.$inferSelect):
   } catch { /* Non-critical */ }
 }
 
+// ── Micro $2 paper trade sync ─────────────────────────────────────────────────
+
+async function syncMicroPaperTrade(
+  trade: typeof scalperTradesTable.$inferSelect,
+  livePrice: number,
+): Promise<void> {
+  const { id, side, entryPrice, quantity } = trade;
+
+  // Step 1: TP1 hit → move SL to break-even
+  if (!trade.breakEvenActivated && trade.tp1Price != null && entryPrice != null) {
+    const tp1Hit = side === "buy" ? livePrice >= trade.tp1Price : livePrice <= trade.tp1Price;
+    if (tp1Hit) {
+      await db.update(scalperTradesTable).set({
+        slPrice: parseFloat(entryPrice.toFixed(8)),
+        breakEvenActivated: true,
+      }).where(eq(scalperTradesTable.id, id));
+      logger.info({ tradeId: id, entryPrice, tp1Price: trade.tp1Price }, "Micro paper: TP1 hit — break-even activated");
+      trade = { ...trade, slPrice: entryPrice, breakEvenActivated: true };
+    }
+  }
+
+  // Step 2: TP2 or SL → close
+  let closeReason: string | null = null;
+  if (trade.tp2Price != null) {
+    const hit = side === "buy" ? livePrice >= trade.tp2Price : livePrice <= trade.tp2Price;
+    if (hit) closeReason = "tp2";
+  }
+  if (!closeReason && trade.slPrice != null) {
+    const hit = side === "buy" ? livePrice <= trade.slPrice : livePrice >= trade.slPrice;
+    if (hit) closeReason = "sl";
+  }
+
+  if (closeReason) {
+    const closePrice =
+      closeReason === "tp2" ? (trade.tp2Price ?? livePrice) : (trade.slPrice ?? livePrice);
+
+    // P&L: 50% exited at TP1 (if BE activated), 50% at closePrice
+    let pnl: number | null = null;
+    if (entryPrice != null && quantity != null) {
+      const d = side === "buy" ? 1 : -1;
+      if (closeReason !== "sl" && trade.breakEvenActivated && trade.tp1Price != null) {
+        pnl = (trade.tp1Price - entryPrice) * d * quantity * 0.50
+            + (closePrice - entryPrice) * d * quantity * 0.50;
+      } else {
+        pnl = (closePrice - entryPrice) * d * quantity;
+      }
+    }
+
+    await db.update(scalperTradesTable).set({
+      status: "closed", livePrice, closePrice, closeReason,
+      pnl: pnl != null ? parseFloat(pnl.toFixed(4)) : null,
+      closedAt: new Date(),
+    }).where(eq(scalperTradesTable.id, id));
+
+    logger.info({ tradeId: id, closeReason, closePrice, pnl }, "Micro paper: trade closed");
+    if (pnl != null) await updateScalperCompoundBalance(pnl);
+    return;
+  }
+
+  // Update unrealised P&L
+  const unrealizedPnl =
+    entryPrice != null && quantity != null
+      ? (side === "buy" ? livePrice - entryPrice : entryPrice - livePrice) * quantity
+      : null;
+  await db.update(scalperTradesTable)
+    .set({ livePrice, pnl: unrealizedPnl != null ? parseFloat(unrealizedPnl.toFixed(4)) : null })
+    .where(eq(scalperTradesTable.id, id));
+}
+
+// ── Micro $2 live trade sync ──────────────────────────────────────────────────
+
+async function syncMicroLiveTrade(trade: typeof scalperTradesTable.$inferSelect): Promise<void> {
+  const { id, gateSymbol, side, entryPrice, quantity } = trade;
+
+  async function tryCancel(orderId: string | null | undefined, label: string): Promise<void> {
+    if (!orderId) return;
+    try {
+      await cancelPriceTriggeredOrder(Number(orderId), gateSymbol);
+      logger.info({ tradeId: id, orderId, label }, "Micro live: cancelled order");
+    } catch { /* already gone */ }
+  }
+
+  async function checkFill(
+    orderId: string | null | undefined,
+  ): Promise<{ filled: true; price: number } | { filled: false; terminal: boolean } | null> {
+    if (!orderId) return null;
+    try {
+      const order = await getPriceTriggeredOrder(Number(orderId), gateSymbol);
+      if (order.status === "finish") {
+        const price = parseFloat(order.put.avg_deal_price || order.put.price);
+        return { filled: true, price };
+      }
+      if (order.status === "open") return { filled: false, terminal: false };
+      return { filled: false, terminal: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("order not found")) return { filled: false, terminal: true };
+      logger.warn({ tradeId: id, orderId, err: msg }, "Micro live: order check failed");
+      return { filled: false, terminal: false };
+    }
+  }
+
+  // ── Check TP1 (50% exit → break-even) ─────────────────────────────────
+  if (!trade.breakEvenActivated && trade.tp1OrderId) {
+    const result = await checkFill(trade.tp1OrderId);
+    if (result?.filled) {
+      await tryCancel(trade.slOrderId, "old-SL");
+
+      const remainingQty = quantity != null ? quantity * 0.50 : null;
+      let newSlOrderId: string | null = null;
+
+      if (entryPrice != null && remainingQty != null && remainingQty > 0) {
+        try {
+          const slFmt = await fmtForPair(gateSymbol, entryPrice, remainingQty);
+          const slRule = side === "buy" ? "<=" : ">=";
+          const exitSide = side === "buy" ? "sell" : "buy";
+          const newSl = await placePriceTriggeredOrder({
+            currencyPair: gateSymbol,
+            triggerPrice: slFmt.price, triggerRule: slRule,
+            side: exitSide, amount: slFmt.amount,
+            orderPrice: "0", orderType: "market",
+          });
+          newSlOrderId = newSl.id.toString();
+          logger.info({ tradeId: id, newSlOrderId, bePrice: slFmt.price }, "Micro live: TP1 hit — break-even SL placed");
+        } catch (err) {
+          logger.warn({ tradeId: id, err }, "Micro live: failed to place break-even SL");
+        }
+      }
+
+      await db.update(scalperTradesTable).set({
+        slPrice:            entryPrice != null ? parseFloat(entryPrice.toFixed(8)) : undefined,
+        slOrderId:          newSlOrderId,
+        tp1OrderId:         null,
+        breakEvenActivated: true,
+      }).where(eq(scalperTradesTable.id, id));
+
+      trade = { ...trade, tp1OrderId: null, slOrderId: newSlOrderId, slPrice: entryPrice ?? trade.slPrice, breakEvenActivated: true };
+      logger.info({ tradeId: id }, "Micro live: break-even activated after TP1");
+    }
+  }
+
+  // ── Check TP2 / SL for full close ─────────────────────────────────────
+  const exitChecks: { orderId: string | null | undefined; reason: string }[] = [
+    { orderId: trade.tp2OrderId, reason: "tp2" },
+    { orderId: trade.slOrderId,  reason: "sl"  },
+  ];
+
+  for (const { orderId, reason } of exitChecks) {
+    if (!orderId) continue;
+    const result = await checkFill(orderId);
+    if (result?.filled) {
+      const closePrice = result.price;
+      let pnl: number | null = null;
+      if (entryPrice != null && quantity != null) {
+        const d = side === "buy" ? 1 : -1;
+        if (reason !== "sl" && trade.breakEvenActivated && trade.tp1Price != null) {
+          pnl = (trade.tp1Price - entryPrice) * d * quantity * 0.50
+              + (closePrice - entryPrice) * d * quantity * 0.50;
+        } else {
+          pnl = (closePrice - entryPrice) * d * quantity;
+        }
+      }
+
+      await db.update(scalperTradesTable).set({
+        status: "closed", closePrice, closeReason: reason,
+        pnl: pnl != null ? parseFloat(pnl.toFixed(4)) : null,
+        closedAt: new Date(),
+      }).where(eq(scalperTradesTable.id, id));
+
+      logger.info({ tradeId: id, reason, closePrice, pnl }, "Micro live: trade closed");
+      if (pnl != null) await updateScalperCompoundBalance(pnl);
+
+      const others = exitChecks.filter(c => c.orderId && c.orderId !== orderId).map(c => c.orderId!);
+      for (const oid of others) await tryCancel(oid, "companion");
+      return;
+    }
+  }
+
+  // Update live P&L
+  try {
+    const livePrice = await getLivePrice(gateSymbol);
+    const pnl =
+      entryPrice != null && quantity != null
+        ? (side === "buy" ? livePrice - entryPrice : entryPrice - livePrice) * quantity
+        : null;
+    await db.update(scalperTradesTable)
+      .set({ livePrice, pnl: pnl != null ? parseFloat(pnl.toFixed(4)) : null })
+      .where(eq(scalperTradesTable.id, id));
+  } catch { /* non-critical */ }
+}
+
 // ── Main sync dispatcher ──────────────────────────────────────────────────────
 
 async function syncScalperTrade(trade: typeof scalperTradesTable.$inferSelect): Promise<void> {
-  const isCht = trade.strategy === "cht" || trade.tp1Price != null;
+  const isMicro = trade.strategy === "micro_2usd";
+  const isCht   = !isMicro && (trade.strategy === "cht" || (trade.tp1Price != null && trade.tp3Price != null));
+
+  if (isMicro) {
+    if (trade.paperMode) {
+      let livePrice: number;
+      try {
+        livePrice = await getLivePrice(trade.gateSymbol);
+      } catch (err) {
+        logger.warn({ tradeId: trade.id, err }, "Micro sync: failed to fetch live price");
+        return;
+      }
+      return syncMicroPaperTrade(trade, livePrice);
+    }
+    return syncMicroLiveTrade(trade);
+  }
 
   if (isCht) {
     if (trade.paperMode) {
