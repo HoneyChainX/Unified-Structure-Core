@@ -4,7 +4,8 @@ import { eq, desc, count, inArray } from "drizzle-orm";
 import { getUsdtBalance, getLivePrice, placeSpotOrder, cancelPriceTriggeredOrder, getApiKeyDetail } from "../services/gateio";
 import { scalperLastSyncAt } from "../services/scalper-sync";
 import { scalperLoopLastRunAt, scalperLoopLastSignalCount, runScalperScan } from "../services/scalper-loop";
-import { getTopUsdtSymbols, fetchCandles, computeBB, computeRSI, computeVolumeRatio, computeEMA } from "../services/scalper-signals";
+import { getTopUsdtSymbols, fetchCandles, computeBB, computeRSI, computeVolumeRatio, computeEMA, evaluateSignal } from "../services/scalper-signals";
+import { evaluateSMCSignal } from "../services/scalper-signals-smc";
 
 const router = Router();
 
@@ -224,6 +225,11 @@ router.get("/performance", async (req, res): Promise<void> => {
 
 router.get("/scan", async (req, res): Promise<void> => {
   const [config] = await db.select().from(scalperConfigTable).limit(1);
+  const strategy = config?.strategy ?? "bb_rsi";
+  const longOnly = config?.longOnly ?? false;
+  const bbPeriod = config?.bbPeriod ?? 20;
+  const bbStdDev = config?.bbStdDev ?? 2.0;
+  const rsiPeriod = config?.rsiPeriod ?? 14;
 
   let symbols: string[];
   try {
@@ -235,17 +241,31 @@ router.get("/scan", async (req, res): Promise<void> => {
 
   const results = await Promise.allSettled(
     symbols.map(async (gateSymbol) => {
-      const candles = await fetchCandles(gateSymbol, "5m", 60);
+      // 150 candles covers both BB+RSI (needs ~60) and SMC (needs swing history)
+      const candles = await fetchCandles(gateSymbol, "5m", 150);
       const closes = candles.map((c) => c.close);
       const volumes = candles.map((c) => c.volume);
-      const bbPeriod = config?.bbPeriod ?? 20;
-      const bbStdDev = config?.bbStdDev ?? 2.0;
-      const rsiPeriod = config?.rsiPeriod ?? 14;
 
       const bb = computeBB(closes, bbPeriod, bbStdDev);
       const rsi = computeRSI(closes, rsiPeriod);
       const volumeRatio = computeVolumeRatio(volumes);
       const lastClose = closes[closes.length - 1];
+
+      // Evaluate the active strategy engine
+      let detectedSignal = null;
+      if (strategy === "smc_mss") {
+        detectedSignal = evaluateSMCSignal(gateSymbol, candles, { longOnly });
+      } else {
+        detectedSignal = evaluateSignal(gateSymbol, candles, {
+          bbPeriod, bbStdDev, rsiPeriod,
+          rsiOversold: config?.rsiOversold ?? 30,
+          rsiOverbought: config?.rsiOverbought ?? 70,
+          volumeSpikeMultiplier: config?.volumeSpikeMultiplier ?? 1.5,
+          longOnly,
+          emaFilterEnabled: config?.emaFilterEnabled ?? true,
+          emaPeriod: config?.emaPeriod ?? 50,
+        });
+      }
 
       return {
         gateSymbol,
@@ -257,6 +277,8 @@ router.get("/scan", async (req, res): Promise<void> => {
         volumeRatio: parseFloat(volumeRatio.toFixed(3)),
         nearLower: lastClose <= bb.lower * 1.001,
         nearUpper: lastClose >= bb.upper * 0.999,
+        signalDetected: detectedSignal != null,
+        signalSide: detectedSignal?.side ?? null,
       };
     })
   );
@@ -293,6 +315,7 @@ router.post("/scan/symbol", async (req, res): Promise<void> => {
   }
 
   const [config] = await db.select().from(scalperConfigTable).limit(1);
+  const strategy = config?.strategy ?? "bb_rsi";
   const bbPeriod = config?.bbPeriod ?? 20;
   const bbStdDev = config?.bbStdDev ?? 2.0;
   const rsiPeriod = config?.rsiPeriod ?? 14;
@@ -301,12 +324,15 @@ router.post("/scan/symbol", async (req, res): Promise<void> => {
   const volumeSpikeMultiplier = config?.volumeSpikeMultiplier ?? 1.5;
   const emaFilterEnabled = config?.emaFilterEnabled ?? true;
   const emaPeriod = config?.emaPeriod ?? 50;
+  const longOnly = config?.longOnly ?? false;
 
   try {
-    const candles = await fetchCandles(gateSymbol, "5m", 120);
+    // 150 candles — enough for SMC swing detection (12.5h of 5m data)
+    const candles = await fetchCandles(gateSymbol, "5m", 150);
     const closes = candles.map((c) => c.close);
     const volumes = candles.map((c) => c.volume);
 
+    // Always compute BB/RSI/EMA for display regardless of active strategy
     const bb = computeBB(closes, bbPeriod, bbStdDev);
     const rsi = computeRSI(closes, rsiPeriod);
     const volumeRatio = computeVolumeRatio(volumes);
@@ -321,10 +347,36 @@ router.post("/scan/symbol", async (req, res): Promise<void> => {
     const longSignal = lastClose <= bb.lower && rsi <= rsiOversold && hasVolumeSpike && trendAllowsLong;
     const shortSignal = lastClose >= bb.upper && rsi >= rsiOverbought && hasVolumeSpike && trendAllowsShort;
 
-    req.log.info({ gateSymbol, lastClose, rsi, volumeRatio, ema }, "Manual symbol scan");
+    // ── Run the active strategy evaluator ─────────────────────────────────────
+    let detectedSignal: ReturnType<typeof evaluateSignal> = null;
+    let smcDetails: { obHigh: number; obLow: number; mssLevel: number } | null = null;
+
+    if (strategy === "smc_mss") {
+      const smcSignal = evaluateSMCSignal(gateSymbol, candles, { longOnly });
+      if (smcSignal) {
+        // SMC repurposes BB fields: bbUpper=OB high, bbLower=OB low, bbMid=MSS level
+        smcDetails = {
+          obHigh: parseFloat(smcSignal.bbUpper.toFixed(8)),
+          obLow:  parseFloat(smcSignal.bbLower.toFixed(8)),
+          mssLevel: parseFloat(smcSignal.bbMid.toFixed(8)),
+        };
+        detectedSignal = smcSignal;
+      }
+    } else {
+      detectedSignal = evaluateSignal(gateSymbol, candles, {
+        bbPeriod, bbStdDev, rsiPeriod, rsiOversold, rsiOverbought,
+        volumeSpikeMultiplier, longOnly, emaFilterEnabled, emaPeriod,
+      });
+    }
+
+    req.log.info(
+      { gateSymbol, lastClose, rsi, volumeRatio, strategy, signalDetected: detectedSignal != null },
+      "Manual symbol scan"
+    );
 
     res.json({
       gateSymbol,
+      strategy,
       lastClose: parseFloat(lastClose.toFixed(8)),
       bbUpper: parseFloat(bb.upper.toFixed(8)),
       bbLower: parseFloat(bb.lower.toFixed(8)),
@@ -341,6 +393,15 @@ router.post("/scan/symbol", async (req, res): Promise<void> => {
       longSignal,
       shortSignal,
       hasVolumeSpike,
+      // Detected signal from the active strategy engine
+      signal: detectedSignal ? {
+        side: detectedSignal.side,
+        entryPrice: parseFloat(detectedSignal.entryPrice.toFixed(8)),
+        tpPrice: detectedSignal.tpPrice != null ? parseFloat(detectedSignal.tpPrice.toFixed(8)) : null,
+        slPrice: detectedSignal.slPrice != null ? parseFloat(detectedSignal.slPrice.toFixed(8)) : null,
+        strategy: detectedSignal.strategy ?? strategy,
+      } : null,
+      smcDetails,
       scannedAt: new Date(),
     });
   } catch (err) {
@@ -355,6 +416,10 @@ router.post("/trade/manual", async (req, res): Promise<void> => {
   const body = req.body as Record<string, unknown>;
   const raw = (body["symbol"] as string | undefined)?.trim().toUpperCase();
   const side = body["side"] as string | undefined;
+  // Optional: pre-computed TP/SL from strategy scan (carries geometry through to executor)
+  const tpPriceOverride = typeof body["tpPrice"] === "number" ? (body["tpPrice"] as number) : undefined;
+  const slPriceOverride = typeof body["slPrice"] === "number" ? (body["slPrice"] as number) : undefined;
+  const strategyHint   = typeof body["strategy"] === "string" ? (body["strategy"] as string) : undefined;
 
   if (!raw) { res.status(400).json({ error: "symbol is required" }); return; }
   if (side !== "buy" && side !== "sell") { res.status(400).json({ error: "side must be 'buy' or 'sell'" }); return; }
@@ -399,6 +464,10 @@ router.post("/trade/manual", async (req, res): Promise<void> => {
       bbMid: bb.mid,
       rsi,
       volumeRatio,
+      // Pass through strategy geometry when available (SMC Fib TP, OB-edge SL)
+      tpPrice: tpPriceOverride,
+      slPrice: slPriceOverride,
+      strategy: strategyHint,
     };
 
     req.log.info({ gateSymbol, side, lastClose }, "Manual trade entry requested");

@@ -140,22 +140,40 @@ interface ScanRow {
   volumeRatio?: number;
   nearLower?: boolean;
   nearUpper?: boolean;
+  signalDetected?: boolean;
+  signalSide?: "buy" | "sell" | null;
   error?: string;
+}
+
+interface ManualSignal {
+  side: "buy" | "sell";
+  entryPrice: number;
+  tpPrice: number | null;
+  slPrice: number | null;
+  strategy: string;
 }
 
 interface ManualScanResult {
   gateSymbol: string;
+  strategy: string;
   lastClose: number;
   bbUpper: number;
   bbLower: number;
   bbMid: number;
   rsi: number;
   volumeRatio: number;
+  ema: number;
+  emaPeriod: number;
+  emaFilterEnabled: boolean;
+  trendAllowsLong: boolean;
+  trendAllowsShort: boolean;
   nearLower: boolean;
   nearUpper: boolean;
   longSignal: boolean;
   shortSignal: boolean;
   hasVolumeSpike: boolean;
+  signal: ManualSignal | null;
+  smcDetails: { obHigh: number; obLow: number; mssLevel: number } | null;
   scannedAt: string;
 }
 
@@ -277,9 +295,17 @@ export function ScalperPage() {
     if (!manualResult) return;
     setEntering(side);
     try {
+      const body: Record<string, unknown> = { symbol: manualResult.gateSymbol, side };
+      // If the detected signal matches the chosen direction, carry through strategy geometry (TP/SL/strategy)
+      // so the executor uses e.g. SMC Fib levels instead of falling back to config-based computation
+      if (manualResult.signal && manualResult.signal.side === side) {
+        if (manualResult.signal.tpPrice != null) body["tpPrice"] = manualResult.signal.tpPrice;
+        if (manualResult.signal.slPrice != null) body["slPrice"] = manualResult.signal.slPrice;
+        body["strategy"] = manualResult.signal.strategy;
+      }
       await api("/api/scalper/trade/manual", {
         method: "POST",
-        body: JSON.stringify({ symbol: manualResult.gateSymbol, side }),
+        body: JSON.stringify(body),
       });
       setManualResult(null);
       setManualSymbol("");
@@ -450,14 +476,14 @@ export function ScalperPage() {
             <table className="w-full text-xs font-mono">
               <thead>
                 <tr className="border-b border-border text-muted-foreground">
-                  {["SYMBOL", "PRICE", "BB LOWER", "BB UPPER", "RSI", "VOL RATIO", "SIGNAL"].map((h) => (
+                  {["SYMBOL", "PRICE", "BB LOWER", "BB UPPER", "RSI", "VOL RATIO", "STRATEGY SIGNAL"].map((h) => (
                     <th key={h} className="text-left px-3 py-2">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {scanData.map((row) => (
-                  <tr key={row.gateSymbol} className="border-b border-border/50 hover:bg-secondary/20">
+                  <tr key={row.gateSymbol} className={`border-b border-border/50 hover:bg-secondary/20 ${row.signalDetected ? "bg-primary/5" : ""}`}>
                     <td className="px-3 py-2 font-bold">{row.gateSymbol}</td>
                     <td className="px-3 py-2">{fmt(row.lastClose, 6)}</td>
                     <td className={`px-3 py-2 ${row.nearLower ? "text-green-400 font-bold" : ""}`}>{fmt(row.bbLower, 6)}</td>
@@ -469,12 +495,12 @@ export function ScalperPage() {
                       {fmt(row.volumeRatio, 2)}×
                     </td>
                     <td className="px-3 py-2">
-                      {row.nearLower ? (
-                        <span className="text-green-400 flex items-center gap-1"><ArrowUpRight className="w-3 h-3" />LONG SETUP</span>
-                      ) : row.nearUpper ? (
-                        <span className="text-red-400 flex items-center gap-1"><ArrowDownRight className="w-3 h-3" />SHORT SETUP</span>
+                      {row.signalDetected && row.signalSide === "buy" ? (
+                        <span className="text-green-400 flex items-center gap-1 font-bold"><ArrowUpRight className="w-3 h-3" />LONG ✓</span>
+                      ) : row.signalDetected && row.signalSide === "sell" ? (
+                        <span className="text-red-400 flex items-center gap-1 font-bold"><ArrowDownRight className="w-3 h-3" />SHORT ✓</span>
                       ) : (
-                        <span className="text-muted-foreground">—</span>
+                        <span className="text-muted-foreground">no signal</span>
                       )}
                     </td>
                   </tr>
@@ -945,77 +971,163 @@ export function ScalperPage() {
             </div>
           )}
 
-          {manualResult && (
-            <div className="border border-border bg-secondary/20 space-y-0">
-              {/* Symbol header */}
-              <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-                <div className="font-bold font-mono text-sm">{manualResult.gateSymbol}</div>
-                <div className="text-xs text-muted-foreground">
-                  Scanned {new Date(manualResult.scannedAt).toLocaleTimeString()}
+          {manualResult && (() => {
+            const p = manualResult.lastClose < 1 ? 6 : 4;
+            const sig = manualResult.signal;
+            const isSMC = manualResult.strategy === "smc_mss";
+
+            return (
+              <div className="border border-border bg-secondary/20">
+                {/* ── Symbol header ────────────────────────────────────────── */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+                  <div className="flex items-center gap-3">
+                    <div className="font-bold font-mono text-sm">{manualResult.gateSymbol}</div>
+                    <span className="text-[10px] tracking-widest px-1.5 py-0.5 border border-border text-muted-foreground">
+                      {isSMC ? "SMC MSS+OB" : "BB+RSI"}
+                    </span>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Scanned {new Date(manualResult.scannedAt).toLocaleTimeString()}
+                  </div>
+                </div>
+
+                {/* ── SIGNAL STATUS BANNER ─────────────────────────────────── */}
+                {sig ? (
+                  <div className={`px-4 py-4 border-b border-border ${sig.side === "buy" ? "bg-green-500/10 border-l-2 border-l-green-500" : "bg-red-500/10 border-l-2 border-l-red-500"}`}>
+                    <div className="flex items-center gap-3">
+                      <CheckCircle2 className={`w-5 h-5 shrink-0 ${sig.side === "buy" ? "text-green-400" : "text-red-400"}`} />
+                      <div>
+                        <div className={`text-sm font-bold tracking-widest ${sig.side === "buy" ? "text-green-400" : "text-red-400"}`}>
+                          SIGNAL DETECTED — {sig.side === "buy" ? "LONG" : "SHORT"}
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          Entry ~{sig.entryPrice.toFixed(p)}
+                          {sig.tpPrice != null && <> · TP {sig.tpPrice.toFixed(p)}</>}
+                          {sig.slPrice != null && <> · SL {sig.slPrice.toFixed(p)}</>}
+                        </div>
+                      </div>
+                    </div>
+                    {/* TP/SL level display */}
+                    {(sig.tpPrice != null || sig.slPrice != null) && (
+                      <div className="mt-3 grid grid-cols-2 gap-2 font-mono text-xs">
+                        {sig.tpPrice != null && (
+                          <div className="bg-green-500/10 border border-green-500/30 px-3 py-2">
+                            <div className="text-[10px] text-muted-foreground tracking-widest">TAKE PROFIT</div>
+                            <div className="text-green-400 font-bold mt-0.5">{sig.tpPrice.toFixed(p)}</div>
+                            {sig.tpPrice > sig.entryPrice
+                              ? <div className="text-[10px] text-green-400/70">+{((sig.tpPrice / sig.entryPrice - 1) * 100).toFixed(2)}%</div>
+                              : <div className="text-[10px] text-green-400/70">{((sig.tpPrice / sig.entryPrice - 1) * 100).toFixed(2)}%</div>}
+                          </div>
+                        )}
+                        {sig.slPrice != null && (
+                          <div className="bg-red-500/10 border border-red-500/30 px-3 py-2">
+                            <div className="text-[10px] text-muted-foreground tracking-widest">STOP LOSS</div>
+                            <div className="text-red-400 font-bold mt-0.5">{sig.slPrice.toFixed(p)}</div>
+                            {sig.slPrice < sig.entryPrice
+                              ? <div className="text-[10px] text-red-400/70">{((sig.slPrice / sig.entryPrice - 1) * 100).toFixed(2)}%</div>
+                              : <div className="text-[10px] text-red-400/70">+{((sig.slPrice / sig.entryPrice - 1) * 100).toFixed(2)}%</div>}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="px-4 py-3 border-b border-border bg-secondary/30 flex items-center gap-2">
+                    <span className="w-4 h-4 rounded-full border border-muted-foreground/40 inline-flex items-center justify-center text-muted-foreground/40 text-[10px]">○</span>
+                    <span className="text-xs text-muted-foreground tracking-widest">NO SIGNAL — conditions not met for {isSMC ? "SMC MSS+OB+Fib" : "BB+RSI"} strategy</span>
+                  </div>
+                )}
+
+                {/* ── Strategy-specific details ────────────────────────────── */}
+                {isSMC && manualResult.smcDetails ? (
+                  <div className="px-4 py-3 border-b border-border">
+                    <div className="text-[10px] tracking-widest text-muted-foreground mb-2">SMC STRUCTURE</div>
+                    <div className="grid grid-cols-3 gap-3 text-xs font-mono">
+                      <div>
+                        <div className="text-muted-foreground text-[10px]">OB HIGH</div>
+                        <div className="font-bold text-yellow-400">{manualResult.smcDetails.obHigh.toFixed(p)}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground text-[10px]">OB LOW</div>
+                        <div className="font-bold text-yellow-400">{manualResult.smcDetails.obLow.toFixed(p)}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground text-[10px]">MSS LEVEL</div>
+                        <div className="font-bold text-blue-400">{manualResult.smcDetails.mssLevel.toFixed(p)}</div>
+                      </div>
+                    </div>
+                  </div>
+                ) : !isSMC && (
+                  <div className="px-4 py-2 border-b border-border flex flex-wrap gap-4 text-xs">
+                    {[
+                      { label: "Near BB Lower", ok: manualResult.nearLower },
+                      { label: "Near BB Upper", ok: manualResult.nearUpper },
+                      { label: "RSI Oversold", ok: manualResult.rsi <= 35 },
+                      { label: "RSI Overbought", ok: manualResult.rsi >= 65 },
+                      { label: "Volume Spike", ok: manualResult.hasVolumeSpike },
+                      { label: "Trend OK (Long)", ok: manualResult.trendAllowsLong },
+                      { label: "Trend OK (Short)", ok: manualResult.trendAllowsShort },
+                    ].map(({ label, ok }) => (
+                      <span key={label} className={`flex items-center gap-1 ${ok ? "text-green-400" : "text-muted-foreground"}`}>
+                        {ok ? <CheckCircle2 className="w-3 h-3" /> : <span className="w-3 h-3 inline-flex items-center justify-center text-muted-foreground/40">○</span>}
+                        {label}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* ── Indicators grid ──────────────────────────────────────── */}
+                <div className="grid grid-cols-3 md:grid-cols-6 divide-x divide-border text-xs font-mono border-b border-border">
+                  {[
+                    { label: "PRICE", value: manualResult.lastClose.toFixed(p), color: "" },
+                    { label: "BB LOWER", value: manualResult.bbLower.toFixed(p), color: manualResult.nearLower ? "text-green-400" : "" },
+                    { label: "BB UPPER", value: manualResult.bbUpper.toFixed(p), color: manualResult.nearUpper ? "text-red-400" : "" },
+                    { label: "RSI", value: manualResult.rsi.toFixed(1), color: manualResult.rsi <= 35 ? "text-green-400" : manualResult.rsi >= 65 ? "text-red-400" : "" },
+                    { label: "VOL RATIO", value: `${manualResult.volumeRatio.toFixed(2)}×`, color: manualResult.hasVolumeSpike ? "text-yellow-400" : "" },
+                    { label: `EMA ${manualResult.emaPeriod}`, value: manualResult.ema.toFixed(p), color: manualResult.lastClose > manualResult.ema ? "text-green-400" : "text-red-400" },
+                  ].map(({ label, value, color }) => (
+                    <div key={label} className="px-3 py-3 space-y-0.5">
+                      <div className="text-muted-foreground tracking-widest" style={{ fontSize: "10px" }}>{label}</div>
+                      <div className={`font-bold ${color}`}>{value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* ── Action buttons ────────────────────────────────────────── */}
+                <div className="px-4 py-3 flex items-center gap-3">
+                  <span className="text-xs text-muted-foreground flex-1">
+                    {sig ? "Strategy signal detected — entering will use computed TP/SL levels." : "No signal — force-enter bypasses all strategy conditions."}
+                  </span>
+                  <button
+                    onClick={() => manualEnter("buy")}
+                    disabled={entering !== null}
+                    className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold border transition-colors disabled:opacity-50 ${
+                      sig?.side === "buy"
+                        ? "border-green-500 text-green-400 bg-green-500/10 hover:bg-green-500/20"
+                        : "border-green-500/40 text-green-400/70 hover:bg-green-500/10"
+                    }`}
+                  >
+                    <ArrowUpRight className="w-3.5 h-3.5" />
+                    {entering === "buy" ? "Entering…" : sig?.side === "buy" ? "Enter LONG ✓" : "Force LONG"}
+                  </button>
+                  {!field("longOnly", false) && (
+                    <button
+                      onClick={() => manualEnter("sell")}
+                      disabled={entering !== null}
+                      className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold border transition-colors disabled:opacity-50 ${
+                        sig?.side === "sell"
+                          ? "border-red-500 text-red-400 bg-red-500/10 hover:bg-red-500/20"
+                          : "border-red-500/40 text-red-400/70 hover:bg-red-500/10"
+                      }`}
+                    >
+                      <ArrowDownRight className="w-3.5 h-3.5" />
+                      {entering === "sell" ? "Entering…" : sig?.side === "sell" ? "Enter SHORT ✓" : "Force SHORT"}
+                    </button>
+                  )}
                 </div>
               </div>
-
-              {/* Metrics grid */}
-              <div className="grid grid-cols-3 md:grid-cols-6 divide-x divide-border text-xs font-mono">
-                {[
-                  { label: "PRICE", value: manualResult.lastClose.toFixed(manualResult.lastClose < 1 ? 6 : 4), color: "" },
-                  { label: "BB LOWER", value: manualResult.bbLower.toFixed(manualResult.lastClose < 1 ? 6 : 4), color: manualResult.nearLower ? "text-green-400" : "" },
-                  { label: "BB UPPER", value: manualResult.bbUpper.toFixed(manualResult.lastClose < 1 ? 6 : 4), color: manualResult.nearUpper ? "text-red-400" : "" },
-                  { label: "RSI", value: manualResult.rsi.toFixed(1), color: manualResult.rsi <= 35 ? "text-green-400" : manualResult.rsi >= 65 ? "text-red-400" : "" },
-                  { label: "VOL RATIO", value: `${manualResult.volumeRatio.toFixed(2)}×`, color: manualResult.hasVolumeSpike ? "text-yellow-400" : "" },
-                  {
-                    label: "AUTO SIGNAL",
-                    value: manualResult.longSignal ? "LONG ✓" : manualResult.shortSignal ? "SHORT ✓" : "NONE",
-                    color: manualResult.longSignal ? "text-green-400" : manualResult.shortSignal ? "text-red-400" : "text-muted-foreground",
-                  },
-                ].map(({ label, value, color }) => (
-                  <div key={label} className="px-3 py-3 space-y-0.5">
-                    <div className="text-muted-foreground tracking-widest" style={{ fontSize: "10px" }}>{label}</div>
-                    <div className={`font-bold ${color}`}>{value}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Condition checklist */}
-              <div className="px-4 py-2 border-t border-border flex flex-wrap gap-4 text-xs">
-                {[
-                  { label: "Near BB Lower", ok: manualResult.nearLower },
-                  { label: "Near BB Upper", ok: manualResult.nearUpper },
-                  { label: "RSI Oversold (≤35)", ok: manualResult.rsi <= 35 },
-                  { label: "RSI Overbought (≥65)", ok: manualResult.rsi >= 65 },
-                  { label: "Volume Spike", ok: manualResult.hasVolumeSpike },
-                ].map(({ label, ok }) => (
-                  <span key={label} className={`flex items-center gap-1 ${ok ? "text-green-400" : "text-muted-foreground"}`}>
-                    {ok ? <CheckCircle2 className="w-3 h-3" /> : <span className="w-3 h-3 inline-flex items-center justify-center text-muted-foreground/40">○</span>}
-                    {label}
-                  </span>
-                ))}
-              </div>
-
-              {/* Action buttons */}
-              <div className="px-4 py-3 border-t border-border flex items-center gap-3">
-                <span className="text-xs text-muted-foreground flex-1">Force-enter bypasses indicator conditions and opens immediately at live price.</span>
-                <button
-                  onClick={() => manualEnter("buy")}
-                  disabled={entering !== null}
-                  className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold border border-green-500/50 text-green-400 hover:bg-green-500/10 transition-colors disabled:opacity-50"
-                >
-                  <ArrowUpRight className="w-3.5 h-3.5" />
-                  {entering === "buy" ? "Entering…" : "Enter LONG"}
-                </button>
-                {!field("longOnly", false) && (
-                  <button
-                    onClick={() => manualEnter("sell")}
-                    disabled={entering !== null}
-                    className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold border border-red-500/50 text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
-                  >
-                    <ArrowDownRight className="w-3.5 h-3.5" />
-                    {entering === "sell" ? "Entering…" : "Enter SHORT"}
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       </div>
 
