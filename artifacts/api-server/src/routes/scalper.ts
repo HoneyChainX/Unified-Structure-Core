@@ -2,7 +2,7 @@ import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { db, scalperConfigTable, scalperTradesTable } from "@workspace/db";
 import { eq, desc, count, inArray } from "drizzle-orm";
-import { getUsdtBalance, getLivePrice, placeSpotOrder, cancelPriceTriggeredOrder, getApiKeyDetail } from "../services/gateio";
+import { getUsdtBalance, getLivePrice, placeSpotOrder, cancelPriceTriggeredOrder, getApiKeyDetail, fmtForPair } from "../services/gateio";
 import { scalperLastSyncAt } from "../services/scalper-sync";
 import { scalperLoopLastRunAt, scalperLoopLastSignalCount, scalperLiveScanResults, scalperLiveScanAt, runScalperScan } from "../services/scalper-loop";
 import { getTopUsdtSymbols, fetchCandles, computeBB, computeRSI, computeVolumeRatio, computeEMA, evaluateSignal } from "../services/scalper-signals";
@@ -642,10 +642,13 @@ router.post("/trade/:id/close", async (req, res): Promise<void> => {
   // Place an immediate market order to close the spot position
   try {
     const closeSide: "buy" | "sell" = trade.side === "buy" ? "sell" : "buy";
+    // Use pair-aware precision for the exit amount (e.g. amount_precision=0 pairs need integers)
+    const livePrice = await getLivePrice(trade.gateSymbol).catch(() => 0);
+    const exitFmt = await fmtForPair(trade.gateSymbol, livePrice, trade.quantity);
     const closeOrder = await placeSpotOrder({
       currencyPair: trade.gateSymbol,
       side: closeSide,
-      amount: trade.quantity.toString(),
+      amount: exitFmt.amount,
       type: "market",
     });
 

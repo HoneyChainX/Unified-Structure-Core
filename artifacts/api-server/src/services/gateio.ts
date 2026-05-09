@@ -239,6 +239,46 @@ export function fmtGateAmount(amount: number): string {
   return amount.toFixed(6);
 }
 
+// ── Pair-aware precision helpers ─────────────────────────────────────────────
+// Gate.io exposes per-pair `precision` (price decimal places) and
+// `amount_precision` (base-amount decimal places) via a public REST endpoint.
+// Results are cached for the lifetime of the server process.
+interface GatePairInfo { precision: number; amount_precision: number; }
+const pairInfoCache = new Map<string, GatePairInfo>();
+
+async function fetchPairInfo(currencyPair: string): Promise<GatePairInfo> {
+  const cached = pairInfoCache.get(currencyPair);
+  if (cached) return cached;
+  const res = await fetch(`${BASE}${API_PATH_PREFIX}/spot/currency_pairs/${currencyPair}`);
+  if (!res.ok) throw new Error(`Pair info fetch failed: ${res.status}`);
+  const data = await res.json() as { precision: number; amount_precision: number };
+  const info: GatePairInfo = { precision: data.precision, amount_precision: data.amount_precision };
+  pairInfoCache.set(currencyPair, info);
+  return info;
+}
+
+/**
+ * Pair-aware formatter: fetches (and caches) Gate.io's per-pair decimal limits,
+ * then formats price and amount to exactly the allowed number of decimal places.
+ * Falls back to static heuristics if the pair-info fetch fails.
+ */
+export async function fmtForPair(
+  currencyPair: string,
+  price: number,
+  amount: number
+): Promise<{ price: string; amount: string }> {
+  try {
+    const info = await fetchPairInfo(currencyPair);
+    return {
+      price:  price.toFixed(info.precision),
+      amount: amount.toFixed(info.amount_precision),
+    };
+  } catch {
+    logger.warn({ currencyPair }, "gateio: could not fetch pair precision — using static fallback");
+    return { price: fmtGatePrice(price), amount: fmtGateAmount(amount) };
+  }
+}
+
 export function toGateSymbol(tvSymbol: string): string {
   const quotes = ["USDT", "USDC", "BTC", "ETH", "BNB"];
   for (const q of quotes) {

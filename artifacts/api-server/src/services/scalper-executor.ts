@@ -16,8 +16,7 @@ import {
   getLivePrice,
   placeSpotOrder,
   placePriceTriggeredOrder,
-  fmtGatePrice,
-  fmtGateAmount,
+  fmtForPair,
 } from "./gateio";
 import type { ScalperSignal } from "./scalper-signals";
 import { logger } from "../lib/logger";
@@ -278,18 +277,22 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     const orderUpdates: { tpOrderId?: string; slOrderId?: string; errorMessage?: string } = {};
     const orderErrors: string[] = [];
 
+    // Fetch pair-specific precision once for both TP and SL orders
+    const tpFmt = await fmtForPair(signal.gateSymbol, actualTp, filledQty);
+    const slFmt = await fmtForPair(signal.gateSymbol, actualSl, filledQty);
+
     // TP order — use precision-safe price/amount formatting for Gate.io
     try {
       const tpOrder = await placePriceTriggeredOrder({
         currencyPair: signal.gateSymbol,
-        triggerPrice: fmtGatePrice(actualTp),
+        triggerPrice: tpFmt.price,
         triggerRule: signal.side === "buy" ? ">=" : "<=",
         side: signal.side === "buy" ? "sell" : "buy",
-        amount: fmtGateAmount(filledQty),
-        orderPrice: fmtGatePrice(actualTp),
+        amount: tpFmt.amount,
+        orderPrice: tpFmt.price,
       });
       orderUpdates.tpOrderId = tpOrder.id.toString();
-      logger.info({ tradeId: trade.id, tpOrderId: tpOrder.id, triggerPrice: fmtGatePrice(actualTp) }, "Scalper: TP order placed");
+      logger.info({ tradeId: trade.id, tpOrderId: tpOrder.id, triggerPrice: tpFmt.price }, "Scalper: TP order placed");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn({ tradeId: trade.id, err: msg }, "Scalper: failed to place TP order");
@@ -300,15 +303,15 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     try {
       const slOrder = await placePriceTriggeredOrder({
         currencyPair: signal.gateSymbol,
-        triggerPrice: fmtGatePrice(actualSl),
+        triggerPrice: slFmt.price,
         triggerRule: signal.side === "buy" ? "<=" : ">=",
         side: signal.side === "buy" ? "sell" : "buy",
-        amount: fmtGateAmount(filledQty),
+        amount: slFmt.amount,
         orderPrice: "0",   // ignored for market put orders
         orderType: "market",
       });
       orderUpdates.slOrderId = slOrder.id.toString();
-      logger.info({ tradeId: trade.id, slOrderId: slOrder.id, triggerPrice: fmtGatePrice(actualSl) }, "Scalper: SL order placed");
+      logger.info({ tradeId: trade.id, slOrderId: slOrder.id, triggerPrice: slFmt.price }, "Scalper: SL order placed");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn({ tradeId: trade.id, err: msg }, "Scalper: failed to place SL order");

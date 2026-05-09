@@ -15,7 +15,7 @@
 
 import { db, scalperConfigTable, scalperTradesTable } from "@workspace/db";
 import { eq, inArray } from "drizzle-orm";
-import { getLivePrice, getPriceTriggeredOrder, cancelPriceTriggeredOrder, placeSpotOrder, placePriceTriggeredOrder, fmtGatePrice, fmtGateAmount } from "./gateio";
+import { getLivePrice, getPriceTriggeredOrder, cancelPriceTriggeredOrder, placeSpotOrder, placePriceTriggeredOrder, fmtForPair } from "./gateio";
 import { logger } from "../lib/logger";
 
 export let scalperLastSyncAt: Date | null = null;
@@ -161,9 +161,17 @@ async function syncScalperTrade(trade: typeof scalperTradesTable.$inferSelect): 
         logger.warn({ tradeId: id, orderId, reason, status: order.status }, "Scalper: price-triggered order terminated without fill");
       }
     } catch (err) {
-      // Can't reach Gate.io or order not found — be conservative, don't assume terminal
-      allOrdersTerminal = false;
-      logger.warn({ tradeId: id, orderId, err }, "Scalper sync: failed to check price-triggered order");
+      const msg = err instanceof Error ? err.message : String(err);
+      // "order not found" means Gate.io has purged the order — it's definitively gone (filled,
+      // cancelled, or expired). Treat as terminal so the price-based fallback can close the trade.
+      if (msg.includes("order not found")) {
+        logger.warn({ tradeId: id, orderId, reason }, "Scalper sync: order not found on Gate.io — treating as terminal");
+        // allOrdersTerminal stays true — price fallback will run after the loop
+      } else {
+        // Transient network error — be conservative, keep the position alive
+        allOrdersTerminal = false;
+        logger.warn({ tradeId: id, orderId, err: msg }, "Scalper sync: failed to check price-triggered order");
+      }
     }
   }
 
@@ -177,16 +185,17 @@ async function syncScalperTrade(trade: typeof scalperTradesTable.$inferSelect): 
 
     if (!trade.tpOrderId) {
       try {
+        const tpFmt = await fmtForPair(gateSymbol, trade.tpPrice, quantity);
         const tpOrder = await placePriceTriggeredOrder({
           currencyPair: gateSymbol,
-          triggerPrice: fmtGatePrice(trade.tpPrice),
+          triggerPrice: tpFmt.price,
           triggerRule: side === "buy" ? ">=" : "<=",
           side: side === "buy" ? "sell" : "buy",
-          amount: fmtGateAmount(quantity),
-          orderPrice: fmtGatePrice(trade.tpPrice),
+          amount: tpFmt.amount,
+          orderPrice: tpFmt.price,
         });
         retryUpdates.tpOrderId = tpOrder.id.toString();
-        logger.info({ tradeId: id, tpOrderId: tpOrder.id }, "Scalper sync: TP order retry succeeded");
+        logger.info({ tradeId: id, tpOrderId: tpOrder.id, triggerPrice: tpFmt.price }, "Scalper sync: TP order retry succeeded");
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         retryErrors.push(`TP retry: ${msg}`);
@@ -196,17 +205,18 @@ async function syncScalperTrade(trade: typeof scalperTradesTable.$inferSelect): 
 
     if (!trade.slOrderId) {
       try {
+        const slFmt = await fmtForPair(gateSymbol, trade.slPrice, quantity);
         const slOrder = await placePriceTriggeredOrder({
           currencyPair: gateSymbol,
-          triggerPrice: fmtGatePrice(trade.slPrice),
+          triggerPrice: slFmt.price,
           triggerRule: side === "buy" ? "<=" : ">=",
           side: side === "buy" ? "sell" : "buy",
-          amount: fmtGateAmount(quantity),
+          amount: slFmt.amount,
           orderPrice: "0",
           orderType: "market",
         });
         retryUpdates.slOrderId = slOrder.id.toString();
-        logger.info({ tradeId: id, slOrderId: slOrder.id }, "Scalper sync: SL order retry succeeded");
+        logger.info({ tradeId: id, slOrderId: slOrder.id, triggerPrice: slFmt.price }, "Scalper sync: SL order retry succeeded");
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         retryErrors.push(`SL retry: ${msg}`);
@@ -250,16 +260,12 @@ async function syncScalperTrade(trade: typeof scalperTradesTable.$inferSelect): 
         if (quantity != null && quantity > 0) {
           const exitSide = side === "buy" ? "sell" : "buy";
           try {
-            let exitAmount: string;
-            if (exitSide === "sell") {
-              exitAmount = fmtGateAmount(quantity);
-            } else {
-              exitAmount = fmtGateAmount(quantity * livePrice / livePrice); // buy-back: base qty
-            }
+            // Use pair-aware precision for the exit amount (e.g. amount_precision=0 pairs need integers)
+            const exitFmt = await fmtForPair(gateSymbol, livePrice, quantity);
             const exitOrder = await placeSpotOrder({
               currencyPair: gateSymbol,
               side: exitSide,
-              amount: exitAmount,
+              amount: exitFmt.amount,
               type: "market",
             });
             actualClosePrice = parseFloat(exitOrder.avg_deal_price || livePrice.toString());

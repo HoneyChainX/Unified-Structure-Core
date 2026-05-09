@@ -1,0 +1,597 @@
+========================
+CHT ENGINE
+(Crypto Hybrid Trading Intelligence Engine)
+========================
+
+PURPOSE:
+CHT Engine is a multi-factor AI trading decision framework designed for crypto opportunity detection.
+The engine evaluates:
+- Trend
+- Market Structure
+- Liquidity Rotation
+- Volatility
+- Volume
+- Risk
+- Multi-Timeframe Alignment
+- Context
+- Spread Intelligence
+- Confirmation Consensus
+
+The engine DOES NOT enter trades based on a single signal.
+A trade is valid ONLY if all major engines align.
+
+========================================================
+1. CORE DECISION PHILOSOPHY
+========================================================
+
+VALID TRADE =
+Trend Alignment
++
+Market Structure Confirmation
++
+Trigger Confirmation
++
+Volume Confirmation
++
+Volatility Confirmation
++
+Risk Validation
++
+Spread Intelligence
++
+HTF Alignment
++
+TAO Consensus
++
+No Invalidation Signals
+
+========================================================
+2. TREND ENGINE
+========================================================
+
+PRIMARY TREND:
+EMA_FAST = EMA(20)
+EMA_SLOW = EMA(50)
+
+BULLISH TREND:
+EMA20 > EMA50
+
+BEARISH TREND:
+EMA20 < EMA50
+
+TREND STRENGTH:
+ADX(14) > 18
+
+IF ADX < 18:
+MARKET_STATE = RANGE
+
+--------------------------------------------------------
+MULTI-TIMEFRAME CONFIRMATION
+--------------------------------------------------------
+
+CURRENT TF -> HIGHER TF
+
+5m  -> 1h
+15m -> 1h
+1h  -> 4h
+4h  -> 1D
+
+LONG CONDITIONS:
+TF Trend = Bullish
+AND
+HTF Trend = Bullish
+
+SHORT CONDITIONS:
+TF Trend = Bearish
+AND
+HTF Trend = Bearish
+
+========================================================
+3. MARKET STRUCTURE ENGINE (MSS / BOS)
+========================================================
+
+PURPOSE:
+Detect real structure shifts and breakout confirmations.
+
+--------------------------------------------------------
+BULLISH MSS
+--------------------------------------------------------
+
+Price closes above confirmed Swing High.
+
+--------------------------------------------------------
+BEARISH MSS
+--------------------------------------------------------
+
+Price closes below confirmed Swing Low.
+
+--------------------------------------------------------
+VALID BREAKOUT REQUIREMENTS
+--------------------------------------------------------
+
+1. Candle CLOSE beyond level.
+2. Wick-only breakout is invalid.
+3. Candle body size > 40% of candle range.
+4. Volume confirmation required.
+
+--------------------------------------------------------
+RESET LOGIC
+--------------------------------------------------------
+
+If opposite MSS appears:
+- previous MSS becomes invalid
+- trend state resets immediately
+
+========================================================
+4. TRIGGER ENGINE
+========================================================
+
+SUPPORTED SETUPS:
+1. BREAKOUT
+2. RETEST
+3. REVERSAL
+
+--------------------------------------------------------
+A) BREAKOUT TRIGGER
+--------------------------------------------------------
+
+LONG:
+Close > Resistance
+AND
+Volume > SMA(volume,20) * 1.2
+AND
+Bullish Trend
+
+SHORT:
+Close < Support
+AND
+Volume Confirmed
+AND
+Bearish Trend
+
+--------------------------------------------------------
+B) RETEST TRIGGER (HIGH PRIORITY)
+--------------------------------------------------------
+
+LONG FLOW:
+1. Breakout occurs
+2. Price revisits breakout level
+3. Bullish rejection appears
+4. Candle closes above level
+
+SHORT FLOW:
+Opposite logic.
+
+RETEST trades have:
+- higher quality
+- lower fakeouts
+- better RR
+
+--------------------------------------------------------
+C) REVERSAL TRIGGER
+--------------------------------------------------------
+
+LONG:
+Price at Demand Zone
+AND
+RSI crosses above 50
+AND
+Bullish confirmation candle
+
+SHORT:
+Price at Supply Zone
+AND
+RSI crosses below 50
+AND
+Bearish confirmation candle
+
+========================================================
+5. VOLUME ENGINE
+========================================================
+
+BASIC CONFIRMATION:
+volume > SMA(volume,20)
+
+STRONG BREAKOUT:
+volume > SMA(volume,20) * 1.5
+
+--------------------------------------------------------
+VOLUME SCORE
+--------------------------------------------------------
+
+VERY STRONG = 1.0
+GOOD        = 0.7
+MEDIUM      = 0.4
+WEAK        = 0.0
+
+========================================================
+6. VOLATILITY ENGINE
+========================================================
+
+ATR_PERCENT:
+atrPct = ATR(14) / close * 100
+
+--------------------------------------------------------
+SCALP REGIME
+--------------------------------------------------------
+
+0.3% < atrPct < 4%
+
+--------------------------------------------------------
+SWING REGIME
+--------------------------------------------------------
+
+0.6% < atrPct < 8%
+
+IF atrPct TOO LOW:
+NO TRADE
+
+IF atrPct TOO HIGH:
+HIGH CHAOS / LOWER SCORE
+
+========================================================
+7. MARKET CONTEXT ENGINE
+========================================================
+
+MARKET STATES:
+
+RISK_ON
+NEUTRAL
+RISK_OFF
+
+--------------------------------------------------------
+LONG ALLOWED:
+--------------------------------------------------------
+
+RISK_ON
+OR
+NEUTRAL
+
+--------------------------------------------------------
+SHORT ALLOWED:
+--------------------------------------------------------
+
+RISK_OFF
+OR
+NEUTRAL
+
+========================================================
+8. SPREAD INTELLIGENCE ENGINE
+========================================================
+
+PURPOSE:
+Measure:
+- Altcoin strength
+- Liquidity rotation
+- Stablecoin pressure
+- Relative strength vs BTC
+
+--------------------------------------------------------
+SPREAD EQUATIONS
+--------------------------------------------------------
+
+A) ALT ROTATION SPREAD
+
+spread_alt_rot =
+log(total3exbtc / btcCap)
+-
+sma(log(total3exbtc / btcCap), L)
+
+--------------------------------------------------------
+B) RELATIVE STRENGTH VS BTC
+
+spread_x_btc =
+log(close / btcUsd)
+-
+sma(log(close / btcUsd), L)
+
+--------------------------------------------------------
+C) STABLECOIN PRESSURE
+
+spread_stable =
+log((usdtCap + usdcCap) / total3)
+-
+sma(log((usdtCap + usdcCap) / total3), L)
+
+--------------------------------------------------------
+FINAL SPREAD SCORE
+--------------------------------------------------------
+
+SPREAD_SCORE =
+0.4 * spread_alt_rot
++
+0.3 * spread_x_btc
++
+0.3 * spread_stable
+
+--------------------------------------------------------
+INTERPRETATION
+--------------------------------------------------------
+
+HIGH POSITIVE SCORE:
+- Strong alt rotation
+- Bullish liquidity flow
+
+HIGH NEGATIVE SCORE:
+- Stablecoin defensive flow
+- Risk-off environment
+
+========================================================
+9. CORRELATION ENGINE
+========================================================
+
+PURPOSE:
+Avoid dangerous over-correlation and weak momentum.
+
+--------------------------------------------------------
+RULES
+--------------------------------------------------------
+
+correlation(close, BTC, 20) < 0.9
+
+AND
+
+correlation(volume, roc(close,1),14) > 0.5
+
+========================================================
+10. ATTENTION EMA ENGINE
+========================================================
+
+PURPOSE:
+Adaptive EMA that reacts faster to momentum shifts.
+
+--------------------------------------------------------
+LOGIC
+--------------------------------------------------------
+
+When deviation increases:
+Recent candles receive larger weighting.
+
+RESULT:
+- lower lag
+- faster regime detection
+- earlier trend shift recognition
+
+========================================================
+11. DIVERGENCE ENGINE
+========================================================
+
+BULLISH DIVERGENCE:
+Price makes Lower Low
+while RSI/MACD makes Higher Low
+
+BEARISH DIVERGENCE:
+Price makes Higher High
+while RSI/MACD makes Lower High
+
+IMPORTANT:
+Divergence alone NEVER triggers a trade.
+It only increases confidence score.
+
+========================================================
+12. RISK ENGINE
+========================================================
+
+--------------------------------------------------------
+STOP LOSS LOGIC
+--------------------------------------------------------
+
+BREAKOUT:
+SL = breakoutLevel - 1 ATR
+
+RETEST:
+SL = retestLow - 0.8 ATR
+
+REVERSAL:
+SL = zoneLow - 0.8 ATR
+
+--------------------------------------------------------
+TAKE PROFIT LOGIC
+--------------------------------------------------------
+
+TP1 = 1R
+TP2 = 1.5R
+TP3 = 2R
+
+--------------------------------------------------------
+RISK QUALITY
+--------------------------------------------------------
+
+EXCELLENT:
+RR >= 2
+
+GOOD:
+RR >= 1.2
+
+WEAK:
+RR < 1
+
+========================================================
+13. TAO CONSENSUS ENGINE
+========================================================
+
+PURPOSE:
+Use multiple expert engines instead of single-condition trading.
+
+--------------------------------------------------------
+EXPERTS
+--------------------------------------------------------
+
+1. Spread Expert
+2. Trend Expert
+3. EMA Expert
+4. Volume Expert
+5. Divergence Expert
+6. Rotation Expert
+
+--------------------------------------------------------
+FINAL DECISION
+--------------------------------------------------------
+
+tao_votes >= 5
+
+ONLY THEN:
+HIGH CONFIDENCE SIGNAL
+
+========================================================
+14. OPPORTUNITY SCORE ENGINE
+========================================================
+
+FINAL SCORE RANGE:
+0 -> 100
+
+--------------------------------------------------------
+WEIGHTS
+--------------------------------------------------------
+
+Trend Alignment        = 20
+HTF Confirmation       = 20
+Trigger Quality        = 25
+Volume Confirmation    = 10
+Volatility Regime      = 10
+Risk Quality           = 15
+
+TOTAL = 100
+
+--------------------------------------------------------
+CLASSIFICATION
+--------------------------------------------------------
+
+85+ = ELITE
+75-84 = STRONG
+60-74 = MEDIUM
+<60 = IGNORE
+
+========================================================
+15. INVALIDATION ENGINE
+========================================================
+
+SIGNAL INVALID IF:
+
+1. Trend reverses
+2. Volume collapses
+3. Price extends too far before entry
+4. HTF confirmation fails
+5. ATR regime becomes invalid
+6. Opposite MSS appears
+
+========================================================
+16. NO-REPAINT RULES
+========================================================
+
+ALL SIGNALS:
+confirmed ONLY on candle close
+
+request.security:
+lookahead_off mandatory
+
+No future-looking pivots allowed.
+
+========================================================
+17. FINAL TRADE FILTER
+========================================================
+
+TRADE VALID ONLY IF:
+
+Trend_OK
+AND Structure_OK
+AND Trigger_OK
+AND Volume_OK
+AND ATR_OK
+AND Risk_OK
+AND Spread_OK
+AND HTF_OK
+AND TAO_OK
+AND No_Invalidation
+
+========================================================
+18. AI PRIORITY RULES
+========================================================
+
+HIGHEST PRIORITY:
+1. Retest setups
+2. HTF aligned trades
+3. Strong volume breakouts
+4. RR >= 1.5
+5. High spread score
+
+LOW PRIORITY:
+- ranging markets
+- low ATR
+- weak volume
+- divergence-only trades
+- chaotic volatility
+
+========================================================
+19. FINAL OFFICIAL TRADE DEFINITION
+========================================================
+
+A valid trade is:
+
+A confirmed directional market structure shift
++
+trend alignment
++
+HTF confirmation
++
+real volume participation
++
+healthy volatility regime
++
+acceptable risk-to-reward
++
+positive spread intelligence
++
+TAO consensus confirmation
++
+no invalidation conditions
+
+========================================================
+20. OUTPUT FORMAT FOR AI BOT
+========================================================
+
+{
+  "symbol": "",
+  "timeframe": "",
+  "side": "LONG/SHORT",
+  "setup_type": "BREAKOUT/RETEST/REVERSAL",
+  "trend_state": "",
+  "market_state": "",
+  "score": 0,
+  "tao_votes": 0,
+  "spread_score": 0,
+  "entry": 0,
+  "sl": 0,
+  "tp1": 0,
+  "tp2": 0,
+  "tp3": 0,
+  "rr": 0,
+  "volume_state": "",
+  "atr_state": "",
+  "confidence": "",
+  "reason": ""
+}
+
+========================================================
+21. MASTER RULE
+========================================================
+
+DO NOT TRADE BECAUSE PRICE MOVES.
+
+TRADE ONLY WHEN:
+Trend
++
+Structure
++
+Context
++
+Volume
++
+Spread
++
+Risk
++
+Confirmation
+
+ALL ALIGN TOGETHER.
+========================================================
