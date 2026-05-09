@@ -41,6 +41,8 @@ export interface ScalperSignal {
   slPrice?: number;
   /** Which engine generated this signal */
   strategy?: string;
+  /** Which timeframe the signal was detected on (e.g. "3m", "5m", "1h") */
+  timeframe?: string;
   // CHT Engine — 3-TP bracket (TP1=1R 30%, TP2=1.5R 30%, TP3=2R 40%)
   tp1Price?: number;
   tp2Price?: number;
@@ -167,6 +169,8 @@ export interface SignalParams {
   emaPeriod: number;
   /** Override the symbol list — skips top-5 fetch when provided */
   symbols?: string[];
+  /** Timeframe for candle fetching (default "5m") */
+  timeframe?: string;
 }
 
 export function evaluateSignal(
@@ -241,10 +245,14 @@ export async function scanForSignals(params: SignalParams): Promise<ScalperSigna
     }
   }
 
+  const tf = params.timeframe ?? "5m";
+  const candleCount = ({ "3m": 150, "5m": 150, "15m": 150, "1h": 100, "4h": 80, "1d": 60 } as Record<string, number>)[tf] ?? CANDLE_LIMIT;
+
   const results = await Promise.allSettled(
     symbols.map(async (gateSymbol) => {
-      const candles = await fetchCandles(gateSymbol, "5m", CANDLE_LIMIT);
-      return evaluateSignal(gateSymbol, candles, params);
+      const candles = await fetchCandles(gateSymbol, tf, candleCount);
+      const sig = evaluateSignal(gateSymbol, candles, params);
+      return sig ? { ...sig, timeframe: tf } : null;
     })
   );
 

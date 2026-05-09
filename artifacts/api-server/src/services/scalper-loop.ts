@@ -1,23 +1,64 @@
 /**
  * Scalper scan loop — runs every 2.5 minutes.
- * Execution: uses active strategy only (BB+RSI or SMC).
- * Live display: dual-strategy scan for ALL configured symbols — results
- *   stored in memory and exposed via GET /api/scalper/scan/live.
+ *
+ * Live monitor: always scans all 6 timeframes (3m/5m/15m/1h/4h/1d) across
+ *   BB+RSI, SMC MSS+OB, and CHT — results stored in memory and exposed via
+ *   GET /api/scalper/scan/live.
+ *
+ * Execution: only fires on timeframes appropriate for the configured TP mode:
+ *   - Fixed USDT TP  → 3m, 5m          (scalp)
+ *   - Fixed % TP     → 15m, 1h, 4h, 1d  (swing)
+ *   - Auto/dynamic BB → all six
  */
 
 import { db, scalperConfigTable } from "@workspace/db";
-import { scanForSignals, fetchCandles, evaluateSignal, getTopUsdtSymbols } from "./scalper-signals";
+import {
+  scanForSignals,
+  fetchCandles,
+  evaluateSignal,
+  getTopUsdtSymbols,
+  type Candle,
+  type ScalperSignal,
+} from "./scalper-signals";
 import { scanForSMCSignals, evaluateSMCSignal } from "./scalper-signals-smc";
-import { scanForCHTSignals, evaluateCHTSignal } from "./scalper-signals-cht";
+import {
+  scanForCHTSignals,
+  evaluateCHTSignal,
+  CHT_HTF_MAP,
+  type CHTMarketContext,
+} from "./scalper-signals-cht";
 import { executeScalperSignal } from "./scalper-executor";
+import { getMarketStatus } from "./market";
 import { logger } from "../lib/logger";
+
+// ── Timeframe configuration ───────────────────────────────────────────────
+
+/** All timeframes scanned by the live monitor (always all 6). */
+const ALL_LIVE_TFS = ["3m", "5m", "15m", "1h", "4h", "1d"] as const;
+
+/** Candle counts per timeframe — sufficient for every indicator window. */
+const CANDLE_COUNTS: Record<string, number> = {
+  "3m": 150, "5m": 150, "15m": 150, "1h": 100, "4h": 80, "1d": 60,
+};
+
+/**
+ * Returns the execution-only timeframes for a given config:
+ *   - Fixed USDT TP  → ["3m","5m"]
+ *   - Fixed % TP     → ["15m","1h","4h","1d"]
+ *   - Auto/dynamic BB → all six
+ */
+function getExecutionTimeframes(config: typeof scalperConfigTable.$inferSelect): string[] {
+  if (config.dynamicTp) return [...ALL_LIVE_TFS];
+  if (config.targetProfitPct != null && config.targetProfitPct > 0) return ["15m", "1h", "4h", "1d"];
+  return ["3m", "5m"];
+}
 
 // ── Execution loop state ────────────────────────────────────────────────────
 
 export let scalperLoopLastRunAt: Date | null = null;
 export let scalperLoopLastSignalCount = 0;
 
-// ── Live dual-scan results (in-memory) ────────────────────────────────────
+// ── Live multi-TF scan results (in-memory) ────────────────────────────────
 
 export interface LiveScanEntry {
   gateSymbol: string;
@@ -27,6 +68,8 @@ export interface LiveScanEntry {
   bbRsi: {
     detected: boolean;
     side: "buy" | "sell" | null;
+    /** Timeframe on which the signal was detected (e.g. "5m", "1h"). */
+    timeframe: string | null;
     rsi: number | null;
     volumeRatio: number | null;
     tp: number | null;
@@ -35,6 +78,7 @@ export interface LiveScanEntry {
   smc: {
     detected: boolean;
     side: "buy" | "sell" | null;
+    timeframe: string | null;
     tp: number | null;
     sl: number | null;
     obHigh: number | null;
@@ -44,6 +88,7 @@ export interface LiveScanEntry {
   cht: {
     detected: boolean;
     side: "buy" | "sell" | null;
+    timeframe: string | null;
     score: number | null;
     grade: string | null;
     setupType: string | null;
@@ -59,7 +104,7 @@ export interface LiveScanEntry {
 export let scalperLiveScanResults: LiveScanEntry[] = [];
 export let scalperLiveScanAt: Date | null = null;
 
-// ── Dual-strategy scan (display only, no execution) ──────────────────────
+// ── Live scan (display only — always scans all 6 TFs) ─────────────────────
 
 async function runLiveDualScan(): Promise<void> {
   const [config] = await db.select().from(scalperConfigTable).limit(1);
@@ -71,22 +116,16 @@ async function runLiveDualScan(): Promise<void> {
     ? allowlistRaw.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean)
     : [];
 
-  // Always fetch top-N by volume to fill out the monitor
   let topSymbols: string[] = [];
   try {
     topSymbols = await getTopUsdtSymbols(scanPoolSize);
   } catch (err) {
-    logger.error({ err }, "Live dual scan: failed to fetch top symbols");
-    topSymbols = [];
+    logger.error({ err }, "Live scan: failed to fetch top symbols");
   }
 
-  // Priority order: allowlist first, then top-volume pairs not already in allowlist
   const allowlistSet = new Set(allowlistSymbols);
   const fillSymbols = topSymbols.filter((s) => !allowlistSet.has(s));
-  const symbols = [
-    ...allowlistSymbols,
-    ...fillSymbols,
-  ].slice(0, scanPoolSize);
+  const symbols = [...allowlistSymbols, ...fillSymbols].slice(0, scanPoolSize);
 
   const longOnly = config?.longOnly ?? false;
   const bbParams = {
@@ -101,83 +140,143 @@ async function runLiveDualScan(): Promise<void> {
     emaPeriod: config?.emaPeriod ?? 200,
   };
 
-  // Fetch BTC 5m candles once for CHT spread intelligence (reused across all symbols)
-  let btcCandles: Awaited<ReturnType<typeof fetchCandles>> = [];
+  // Fetch BTC reference candles for all 6 TFs once — shared correlation ref for CHT
+  const btcRefMap = new Map<string, Candle[]>();
+  await Promise.allSettled(
+    (ALL_LIVE_TFS as readonly string[]).map(async (tf) => {
+      try {
+        btcRefMap.set(tf, await fetchCandles("BTC_USDT", tf, CANDLE_COUNTS[tf]!));
+      } catch {}
+    }),
+  );
+
+  // Fetch CoinGecko market context once (cached 60 s inside getMarketStatus)
+  let mktCtx: CHTMarketContext | null = null;
   try {
-    btcCandles = await fetchCandles("BTC_USDT", "5m", 150);
-  } catch (err) {
-    logger.warn({ err }, "Live dual scan: failed to fetch BTC candles for CHT spread");
-  }
+    const s = await getMarketStatus();
+    mktCtx = { btcD: s.btcDominance, othersD: s.othersDominance, stableD: s.stableDominance };
+  } catch {}
 
-  const results: LiveScanEntry[] = [];
+  // Process every symbol: fetch all 6 TF candles in parallel, then evaluate
+  const settled = await Promise.allSettled(
+    symbols.map(async (sym): Promise<LiveScanEntry | null> => {
+      const tfResults = await Promise.allSettled(
+        (ALL_LIVE_TFS as readonly string[]).map(async (tf) => ({
+          tf,
+          candles: await fetchCandles(sym, tf, CANDLE_COUNTS[tf]!),
+        })),
+      );
 
-  for (const sym of symbols) {
-    try {
-      // Fetch 5m (BB+RSI/SMC/CHT) and 1h (CHT HTF) concurrently
-      const [candles, htfCandles] = await Promise.all([
-        fetchCandles(sym, "5m", 150),
-        fetchCandles(sym, "1h", 60).catch(() => [] as Awaited<ReturnType<typeof fetchCandles>>),
-      ]);
-      if (candles.length < 20) continue;
+      const tfMap = new Map<string, Candle[]>();
+      for (const r of tfResults) {
+        if (r.status === "fulfilled") tfMap.set(r.value.tf, r.value.candles);
+      }
 
-      const lastClose = candles[candles.length - 1]!.close;
+      // Display price from the smallest available TF
+      const priceCandles = tfMap.get("5m") ?? tfMap.get("3m") ?? tfMap.get("15m");
+      const lastClose = priceCandles?.at(-1)?.close ?? 0;
+      if (lastClose === 0) return null;
 
-      const bbSignal  = evaluateSignal(sym, candles, bbParams);
-      const smcSignal = evaluateSMCSignal(sym, candles, { longOnly });
-      const chtSignal = htfCandles.length >= 55
-        ? evaluateCHTSignal(sym, candles, htfCandles, btcCandles, { longOnly })
-        : null;
+      // Scan all TFs for each strategy.
+      // BB+RSI / SMC: first (smallest) TF that fires wins.
+      // CHT: keep the TF with the highest opportunity score.
+      let bbRsiSig: ScalperSignal | null = null;
+      let bbRsiTf: string | null = null;
+      let smcSig: ScalperSignal | null = null;
+      let smcTf: string | null = null;
+      let chtSig: ScalperSignal | null = null;
+      let chtTf: string | null = null;
 
-      results.push({
+      for (const tf of ALL_LIVE_TFS) {
+        const ltf = tfMap.get(tf);
+        if (!ltf || ltf.length < 20) continue;
+
+        if (!bbRsiSig) {
+          const sig = evaluateSignal(sym, ltf, bbParams);
+          if (sig) { bbRsiSig = sig; bbRsiTf = tf; }
+        }
+
+        if (!smcSig) {
+          const sig = evaluateSMCSignal(sym, ltf, { longOnly });
+          if (sig) { smcSig = sig; smcTf = tf; }
+        }
+
+        const chtHtf = CHT_HTF_MAP[tf] ?? null;
+        if (chtHtf) {
+          const htf = tfMap.get(chtHtf);
+          const btcRef = btcRefMap.get(tf) ?? [];
+          if (htf && htf.length >= 55) {
+            const sig = evaluateCHTSignal(sym, ltf, htf, btcRef, {
+              longOnly,
+              marketContext: mktCtx,
+              timeframe: tf,
+            });
+            if (sig && (!chtSig || (sig.chtScore ?? 0) > (chtSig.chtScore ?? 0))) {
+              chtSig = sig;
+              chtTf = tf;
+            }
+          }
+        }
+      }
+
+      return {
         gateSymbol: sym,
         lastClose,
         inAllowlist: allowlistSet.size > 0 ? allowlistSet.has(sym) : false,
         bbRsi: {
-          detected: bbSignal !== null,
-          side: bbSignal ? bbSignal.side : null,
-          rsi: bbSignal ? bbSignal.rsi : null,
-          volumeRatio: bbSignal ? bbSignal.volumeRatio : null,
-          tp: bbSignal?.tpPrice ?? null,
-          sl: bbSignal?.slPrice ?? null,
+          detected: bbRsiSig != null,
+          side: bbRsiSig?.side ?? null,
+          timeframe: bbRsiTf,
+          rsi: bbRsiSig?.rsi ?? null,
+          volumeRatio: bbRsiSig?.volumeRatio ?? null,
+          tp: bbRsiSig?.tpPrice ?? null,
+          sl: bbRsiSig?.slPrice ?? null,
         },
         smc: {
-          detected: smcSignal !== null,
-          side: smcSignal ? smcSignal.side : null,
-          tp: smcSignal?.tpPrice ?? null,
-          sl: smcSignal?.slPrice ?? null,
-          obHigh: smcSignal ? smcSignal.bbUpper : null,
-          obLow: smcSignal ? smcSignal.bbLower : null,
-          mssLevel: smcSignal ? smcSignal.bbMid : null,
+          detected: smcSig != null,
+          side: smcSig?.side ?? null,
+          timeframe: smcTf,
+          tp: smcSig?.tpPrice ?? null,
+          sl: smcSig?.slPrice ?? null,
+          obHigh: smcSig?.bbUpper ?? null,
+          obLow: smcSig?.bbLower ?? null,
+          mssLevel: smcSig?.bbMid ?? null,
         },
         cht: {
-          detected:  chtSignal !== null,
-          side:      chtSignal ? chtSignal.side : null,
-          score:     chtSignal?.chtScore     ?? null,
-          grade:     chtSignal?.chtGrade     ?? null,
-          setupType: chtSignal?.chtSetupType ?? null,
-          taoVotes:  chtSignal?.chtTaoVotes  ?? null,
-          tp1:       chtSignal?.tp1Price     ?? null,
-          tp2:       chtSignal?.tp2Price     ?? null,
-          tp3:       chtSignal?.tp3Price     ?? null,
-          sl:        chtSignal?.slPrice      ?? null,
-          rr:        chtSignal?.chtRr        ?? null,
+          detected: chtSig != null,
+          side: chtSig?.side ?? null,
+          timeframe: chtTf,
+          score: chtSig?.chtScore ?? null,
+          grade: chtSig?.chtGrade ?? null,
+          setupType: chtSig?.chtSetupType ?? null,
+          taoVotes: chtSig?.chtTaoVotes ?? null,
+          tp1: chtSig?.tp1Price ?? null,
+          tp2: chtSig?.tp2Price ?? null,
+          tp3: chtSig?.tp3Price ?? null,
+          sl: chtSig?.slPrice ?? null,
+          rr: chtSig?.chtRr ?? null,
         },
-      });
-    } catch (err) {
-      logger.error({ sym, err }, "Live dual scan: error for symbol");
-    }
-  }
+      };
+    }),
+  );
 
-  scalperLiveScanResults = results;
+  scalperLiveScanResults = settled
+    .filter(
+      (r): r is PromiseFulfilledResult<LiveScanEntry> =>
+        r.status === "fulfilled" && r.value != null,
+    )
+    .map((r) => r.value);
+
   scalperLiveScanAt = new Date();
   logger.debug(
     {
-      symbols: results.length,
-      bbHits: results.filter((r) => r.bbRsi.detected).length,
-      smcHits: results.filter((r) => r.smc.detected).length,
-      chtHits: results.filter((r) => r.cht.detected).length,
+      symbols: scalperLiveScanResults.length,
+      tfs: [...ALL_LIVE_TFS],
+      bbHits:  scalperLiveScanResults.filter((r) => r.bbRsi.detected).length,
+      smcHits: scalperLiveScanResults.filter((r) => r.smc.detected).length,
+      chtHits: scalperLiveScanResults.filter((r) => r.cht.detected).length,
     },
-    "Live dual scan complete",
+    "Live scan complete (multi-timeframe)",
   );
 }
 
@@ -199,8 +298,6 @@ export async function runScalperScan(): Promise<void> {
   const scanPoolSize = config.scanPoolSize ?? 20;
   const strategy = config.strategy ?? "bb_rsi";
 
-  // When no allowlist is set, resolve the scan pool from top-N by volume.
-  // This ensures execution covers the same breadth as the live monitor.
   let resolvedSymbols: string[] | null = allowlistSymbols;
   if (!allowlistSymbols) {
     try {
@@ -213,43 +310,71 @@ export async function runScalperScan(): Promise<void> {
     }
   }
 
+  const execTfs = getExecutionTimeframes(config);
+
   logger.debug(
-    allowlistSymbols
-      ? { count: allowlistSymbols.length, symbols: allowlistSymbols, strategy }
-      : { strategy, scanPoolSize, symbols: resolvedSymbols?.length, note: "no allowlist — scanning top by volume" },
-    "Scalper loop: starting symbol scan"
+    { strategy, timeframes: execTfs, symbols: resolvedSymbols?.length ?? 0 },
+    "Scalper loop: starting multi-TF execution scan",
   );
 
-  let signals;
+  // Scan each execution TF; dedupe by symbol — first (smallest) TF hit wins
+  const signalsBySymbol = new Map<string, ScalperSignal>();
 
-  if (strategy === "smc_mss") {
-    signals = await scanForSMCSignals({ longOnly: config.longOnly, symbols: resolvedSymbols! });
-  } else if (strategy === "cht") {
-    signals = await scanForCHTSignals({ longOnly: config.longOnly, symbols: resolvedSymbols! });
-  } else {
-    signals = await scanForSignals({
-      bbPeriod: config.bbPeriod,
-      bbStdDev: config.bbStdDev,
-      rsiPeriod: config.rsiPeriod,
-      rsiOversold: config.rsiOversold,
-      rsiOverbought: config.rsiOverbought,
-      volumeSpikeMultiplier: config.volumeSpikeMultiplier,
-      longOnly: config.longOnly,
-      emaFilterEnabled: config.emaFilterEnabled,
-      emaPeriod: config.emaPeriod,
-      symbols: resolvedSymbols ?? undefined,
-    });
+  for (const tf of execTfs) {
+    let tfSignals: ScalperSignal[];
+
+    if (strategy === "smc_mss") {
+      tfSignals = await scanForSMCSignals({
+        longOnly: config.longOnly,
+        symbols: resolvedSymbols!,
+        timeframe: tf,
+      });
+    } else if (strategy === "cht") {
+      tfSignals = await scanForCHTSignals({
+        longOnly: config.longOnly,
+        symbols: resolvedSymbols!,
+        timeframe: tf,
+      });
+    } else {
+      tfSignals = await scanForSignals({
+        bbPeriod: config.bbPeriod,
+        bbStdDev: config.bbStdDev,
+        rsiPeriod: config.rsiPeriod,
+        rsiOversold: config.rsiOversold,
+        rsiOverbought: config.rsiOverbought,
+        volumeSpikeMultiplier: config.volumeSpikeMultiplier,
+        longOnly: config.longOnly,
+        emaFilterEnabled: config.emaFilterEnabled,
+        emaPeriod: config.emaPeriod,
+        symbols: resolvedSymbols ?? undefined,
+        timeframe: tf,
+      });
+    }
+
+    for (const sig of tfSignals) {
+      if (!signalsBySymbol.has(sig.gateSymbol)) {
+        signalsBySymbol.set(sig.gateSymbol, sig);
+      }
+    }
   }
 
+  const signals = [...signalsBySymbol.values()];
   scalperLoopLastRunAt = new Date();
   scalperLoopLastSignalCount = signals.length;
 
   if (signals.length === 0) {
-    logger.debug({ strategy }, "Scalper loop: no signals this cycle");
+    logger.debug({ strategy, tfs: execTfs }, "Scalper loop: no signals this cycle");
     return;
   }
 
-  logger.info({ count: signals.length, symbols: signals.map((s) => s.gateSymbol), strategy }, "Scalper loop: signals found");
+  logger.info(
+    {
+      count: signals.length,
+      signals: signals.map((s) => `${s.gateSymbol}@${s.timeframe ?? "?"}:${s.side}`),
+      strategy,
+    },
+    "Scalper loop: signals found",
+  );
 
   for (const signal of signals) {
     await executeScalperSignal(signal).catch((err) => {
@@ -265,7 +390,6 @@ let scalperLoopInterval: ReturnType<typeof setInterval> | null = null;
 export function startScalperLoop(intervalMs = 2.5 * 60_000): void {
   if (scalperLoopInterval) return;
 
-  // Small stagger to avoid tight startup races
   setTimeout(() => {
     runLiveDualScan().catch((err) => logger.error({ err }, "Scalper loop: initial dual scan failed"));
     runScalperScan().catch((err) => logger.error({ err }, "Scalper loop: initial scan failed"));

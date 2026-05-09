@@ -334,14 +334,27 @@ export interface CHTMarketContext {
   stableD: number;   // USDT+USDC dominance %
 }
 
+/**
+ * Maps each LTF to the appropriate Higher-Time-Frame for CHT confirmation.
+ * null = skip CHT on this TF (no reliable HTF available).
+ */
+export const CHT_HTF_MAP: Record<string, string | null> = {
+  "3m":  "15m",
+  "5m":  "1h",
+  "15m": "4h",
+  "1h":  "1d",
+  "4h":  "1d",
+  "1d":  null,    // no reliable HTF above daily
+};
+
 // ── Public evaluator ──────────────────────────────────────────────────────────
 
 export function evaluateCHTSignal(
   gateSymbol: string,
-  ltfCandles: Candle[],    // 5m — needs 150+ candles
-  htfCandles: Candle[],    // 1h — needs 55+ candles
-  btcCandles: Candle[],    // BTC 5m — spread + correlation reference
-  params: { longOnly: boolean; marketContext?: CHTMarketContext | null },
+  ltfCandles: Candle[],    // LTF candles (3m–4h) — needs 80+ candles
+  htfCandles: Candle[],    // HTF candles (per CHT_HTF_MAP) — needs 55+ candles
+  btcCandles: Candle[],    // BTC same-TF candles — spread + correlation reference
+  params: { longOnly: boolean; marketContext?: CHTMarketContext | null; timeframe?: string },
 ): ScalperSignal | null {
   if (ltfCandles.length < 80 || htfCandles.length < 55) return null;
 
@@ -501,6 +514,7 @@ export function evaluateCHTSignal(
     rsi,
     volumeRatio,
     strategy:     "cht",
+    timeframe:    params.timeframe,
     chtScore:     score,
     chtGrade:     grade,
     chtSetupType: trigger.type,
@@ -513,10 +527,22 @@ export function evaluateCHTSignal(
 export async function scanForCHTSignals(params: {
   longOnly: boolean;
   symbols: string[];
+  /** LTF timeframe to scan (default "5m"). HTF is derived from CHT_HTF_MAP. */
+  timeframe?: string;
 }): Promise<ScalperSignal[]> {
-  // Fetch BTC 5m candles and CoinGecko market context once (shared across all symbols)
+  const ltfTf  = params.timeframe ?? "5m";
+  const htfTf  = CHT_HTF_MAP[ltfTf] ?? "1h";
+  const ltfCnt = ({ "3m": 150, "5m": 150, "15m": 150, "1h": 100, "4h": 80, "1d": 60 } as Record<string, number>)[ltfTf] ?? 150;
+  const htfCnt = ({ "15m": 150, "1h": 100, "4h": 80, "1d": 60 } as Record<string, number>)[htfTf] ?? 60;
+
+  if (!CHT_HTF_MAP[ltfTf]) {
+    // No HTF available for this TF (e.g. 1d) — CHT requires confirmation
+    return [];
+  }
+
+  // Fetch BTC reference + market context once (shared across all symbols)
   const [btcCandlesResult, marketContextResult] = await Promise.allSettled([
-    fetchCandles("BTC_USDT", "5m", 150),
+    fetchCandles("BTC_USDT", ltfTf, ltfCnt),
     getMarketStatus(),
   ]);
 
@@ -536,10 +562,14 @@ export async function scanForCHTSignals(params: {
   const results = await Promise.allSettled(
     params.symbols.map(async (gateSymbol) => {
       const [ltf, htf] = await Promise.all([
-        fetchCandles(gateSymbol, "5m", 150),
-        fetchCandles(gateSymbol, "1h", 60),
+        fetchCandles(gateSymbol, ltfTf, ltfCnt),
+        fetchCandles(gateSymbol, htfTf, htfCnt),
       ]);
-      return evaluateCHTSignal(gateSymbol, ltf, htf, btcCandles, { ...params, marketContext });
+      return evaluateCHTSignal(gateSymbol, ltf, htf, btcCandles, {
+        ...params,
+        marketContext,
+        timeframe: ltfTf,
+      });
     }),
   );
 

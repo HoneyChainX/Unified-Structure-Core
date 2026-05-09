@@ -248,12 +248,17 @@ export function evaluateSMCSignal(
 export async function scanForSMCSignals(params: {
   longOnly: boolean;
   symbols: string[];
+  /** Timeframe for candle fetching (default "5m") */
+  timeframe?: string;
 }): Promise<ScalperSignal[]> {
+  const tf = params.timeframe ?? "5m";
+  const candleCount = ({ "3m": 150, "5m": 150, "15m": 150, "1h": 100, "4h": 80, "1d": 60 } as Record<string, number>)[tf] ?? 150;
+
   const results = await Promise.allSettled(
     params.symbols.map(async (gateSymbol) => {
-      // 150 candles = 12.5 hours of 5m data — enough for reliable swing detection
-      const candles = await fetchCandles(gateSymbol, "5m", 150);
-      return evaluateSMCSignal(gateSymbol, candles, params);
+      const candles = await fetchCandles(gateSymbol, tf, candleCount);
+      const sig = evaluateSMCSignal(gateSymbol, candles, params);
+      return sig ? { ...sig, timeframe: tf } : null;
     })
   );
 

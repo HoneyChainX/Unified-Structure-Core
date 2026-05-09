@@ -200,6 +200,8 @@ interface LiveScanEntry {
   bbRsi: {
     detected: boolean;
     side: "buy" | "sell" | null;
+    /** Timeframe on which the signal was detected (e.g. "5m", "1h"). */
+    timeframe: string | null;
     rsi: number | null;
     volumeRatio: number | null;
     tp: number | null;
@@ -208,6 +210,7 @@ interface LiveScanEntry {
   smc: {
     detected: boolean;
     side: "buy" | "sell" | null;
+    timeframe: string | null;
     tp: number | null;
     sl: number | null;
     obHigh: number | null;
@@ -217,12 +220,16 @@ interface LiveScanEntry {
   cht: {
     detected: boolean;
     side: "buy" | "sell" | null;
+    timeframe: string | null;
     score: number | null;
     grade: string | null;
     setupType: string | null;
     taoVotes: number | null;
-    tp: number | null;
+    tp1: number | null;
+    tp2: number | null;
+    tp3: number | null;
     sl: number | null;
+    rr: number | null;
   };
 }
 
@@ -747,6 +754,7 @@ export function ScalperPage() {
                           {row.bbRsi.detected ? (
                             <span className={`inline-flex items-center gap-1 font-bold px-2 py-0.5 border ${row.bbRsi.side === "buy" ? "text-green-300 border-green-500/50 bg-green-500/15" : "text-red-300 border-red-500/50 bg-red-500/15"}`}>
                               {row.bbRsi.side === "buy" ? <><ArrowUpRight className="w-3 h-3" />LONG</> : <><ArrowDownRight className="w-3 h-3" />SHORT</>}
+                              {row.bbRsi.timeframe && <span className="font-normal text-[10px] opacity-60 ml-0.5 border border-current/30 px-1">{row.bbRsi.timeframe}</span>}
                             </span>
                           ) : (
                             <span className="text-muted-foreground/50">—</span>
@@ -756,6 +764,7 @@ export function ScalperPage() {
                           {row.smc.detected ? (
                             <span className={`inline-flex items-center gap-1 font-bold px-2 py-0.5 border ${row.smc.side === "buy" ? "text-green-300 border-green-500/50 bg-green-500/15" : "text-red-300 border-red-500/50 bg-red-500/15"}`}>
                               {row.smc.side === "buy" ? <><ArrowUpRight className="w-3 h-3" />LONG</> : <><ArrowDownRight className="w-3 h-3" />SHORT</>}
+                              {row.smc.timeframe && <span className="font-normal text-[10px] opacity-60 ml-0.5 border border-current/30 px-1">{row.smc.timeframe}</span>}
                               {row.smc.obHigh != null && (
                                 <span className="text-violet-300/70 ml-1 font-normal">OB {row.smc.obLow?.toPrecision(5)}–{row.smc.obHigh?.toPrecision(5)}</span>
                               )}
@@ -777,6 +786,7 @@ export function ScalperPage() {
                                 {c.side === "buy" ? "LONG" : "SHORT"}
                                 <span className="font-normal ml-1 text-[10px] opacity-80">{c.grade} {c.score}</span>
                                 {c.setupType && <span className="font-normal text-[10px] opacity-60 ml-0.5">{c.setupType[0]}</span>}
+                                {c.timeframe && <span className="font-normal text-[10px] opacity-50 border border-current/30 px-1 ml-0.5">{c.timeframe}</span>}
                               </span>
                             );
                           })() : (
