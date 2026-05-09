@@ -310,7 +310,12 @@ router.post("/trade/manual", async (req, res): Promise<void> => {
     req.log.info({ gateSymbol, side, lastClose }, "Manual trade entry requested");
 
     const { executeScalperSignal } = await import("../services/scalper-executor.js");
-    await executeScalperSignal(signal);
+    const blocked = await executeScalperSignal(signal, { force: true });
+
+    if (blocked) {
+      res.status(400).json({ error: blocked });
+      return;
+    }
 
     res.json({ ok: true, gateSymbol, side, entryPrice: lastClose });
   } catch (err) {

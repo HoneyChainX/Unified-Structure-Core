@@ -20,16 +20,26 @@ import {
 import type { ScalperSignal } from "./scalper-signals";
 import { logger } from "../lib/logger";
 
-export async function executeScalperSignal(signal: ScalperSignal): Promise<void> {
+export interface ExecuteOptions {
+  /** When true: skip cooldown and duplicate guards (used for manual entries) */
+  force?: boolean;
+}
+
+/**
+ * Returns null on success, or a human-readable reason string if blocked.
+ */
+export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteOptions = {}): Promise<string | null> {
+  const { force = false } = opts;
+
   const [config] = await db.select().from(scalperConfigTable).limit(1);
   if (!config) {
     logger.debug({ symbol: signal.gateSymbol }, "Scalper config not found, skipping");
-    return;
+    return "Scalper config not found";
   }
 
   if (!config.enabled) {
     logger.debug({ symbol: signal.gateSymbol }, "Scalper disabled, skipping");
-    return;
+    return "Scalper bot is disabled — enable it first";
   }
 
   // ── Max open trades ──────────────────────────────────────────────────────
@@ -40,28 +50,30 @@ export async function executeScalperSignal(signal: ScalperSignal): Promise<void>
   const openCount = Number(openRow?.c ?? 0);
   if (openCount >= config.maxOpenTrades) {
     logger.info({ openCount, maxOpenTrades: config.maxOpenTrades }, "Scalper: max open trades reached");
-    return;
+    return `Max open trades reached (${openCount}/${config.maxOpenTrades})`;
   }
 
-  // ── Duplicate symbol guard ───────────────────────────────────────────────
-  const [existing] = await db
-    .select({ id: scalperTradesTable.id })
-    .from(scalperTradesTable)
-    .where(
-      and(
-        eq(scalperTradesTable.gateSymbol, signal.gateSymbol),
-        inArray(scalperTradesTable.status, ["open", "paper"])
+  // ── Duplicate symbol guard (skipped for forced manual entries) ───────────
+  if (!force) {
+    const [existing] = await db
+      .select({ id: scalperTradesTable.id })
+      .from(scalperTradesTable)
+      .where(
+        and(
+          eq(scalperTradesTable.gateSymbol, signal.gateSymbol),
+          inArray(scalperTradesTable.status, ["open", "paper"])
+        )
       )
-    )
-    .limit(1);
+      .limit(1);
 
-  if (existing) {
-    logger.info({ symbol: signal.gateSymbol }, "Scalper: duplicate position, skipping");
-    return;
+    if (existing) {
+      logger.info({ symbol: signal.gateSymbol }, "Scalper: duplicate position, skipping");
+      return `Already have an open position for ${signal.gateSymbol}`;
+    }
   }
 
-  // ── Cooldown guard ───────────────────────────────────────────────────────
-  if (config.cooldownMinutes > 0) {
+  // ── Cooldown guard (skipped for forced manual entries) ───────────────────
+  if (!force && config.cooldownMinutes > 0) {
     const cutoff = new Date(Date.now() - config.cooldownMinutes * 60_000);
     const [recent] = await db
       .select({ id: scalperTradesTable.id })
@@ -76,7 +88,7 @@ export async function executeScalperSignal(signal: ScalperSignal): Promise<void>
 
     if (recent) {
       logger.info({ symbol: signal.gateSymbol, cooldownMinutes: config.cooldownMinutes }, "Scalper: cooldown active");
-      return;
+      return `Cooldown active for ${signal.gateSymbol} — wait ${config.cooldownMinutes} min between trades (or use force)`;
     }
   }
 
@@ -139,7 +151,7 @@ export async function executeScalperSignal(signal: ScalperSignal): Promise<void>
       { tradeId: trade.id, symbol: signal.symbol, side: signal.side, entryPrice: livePrice, positionSize, tpPrice, slPrice },
       "Scalper paper trade recorded"
     );
-    return;
+    return null;
   }
 
   // ── Live execution ───────────────────────────────────────────────────────
@@ -224,9 +236,12 @@ export async function executeScalperSignal(signal: ScalperSignal): Promise<void>
       await db.update(scalperTradesTable).set(orderUpdates).where(eq(scalperTradesTable.id, trade.id));
     }
 
+    return null;
+
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ tradeId: trade.id, symbol: signal.symbol, err: msg }, "Scalper: execution failed");
     await db.update(scalperTradesTable).set({ status: "error", errorMessage: msg }).where(eq(scalperTradesTable.id, trade.id));
+    return msg;
   }
 }
