@@ -24,6 +24,16 @@ export async function runScalperScan(): Promise<void> {
 
   logger.debug("Scalper loop: starting symbol scan");
 
+  // Determine symbols to scan: allowlist overrides top-5 by volume
+  const allowlistRaw = config.symbolAllowlist?.trim();
+  const customSymbols = allowlistRaw
+    ? allowlistRaw.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean)
+    : null;
+
+  if (customSymbols) {
+    logger.debug({ symbols: customSymbols }, "Scalper loop: scanning allowlist symbols");
+  }
+
   const signals = await scanForSignals({
     bbPeriod: config.bbPeriod,
     bbStdDev: config.bbStdDev,
@@ -32,6 +42,7 @@ export async function runScalperScan(): Promise<void> {
     rsiOverbought: config.rsiOverbought,
     volumeSpikeMultiplier: config.volumeSpikeMultiplier,
     longOnly: config.longOnly,
+    symbols: customSymbols ?? undefined,
   });
 
   scalperLoopLastRunAt = new Date();

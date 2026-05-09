@@ -135,6 +135,8 @@ export interface SignalParams {
   rsiOverbought: number;
   volumeSpikeMultiplier: number;
   longOnly: boolean;
+  /** Override the symbol list — skips top-5 fetch when provided */
+  symbols?: string[];
 }
 
 export function evaluateSignal(
@@ -193,11 +195,15 @@ export function evaluateSignal(
 
 export async function scanForSignals(params: SignalParams): Promise<ScalperSignal[]> {
   let symbols: string[];
-  try {
-    symbols = await getTopUsdtSymbols(5);
-  } catch (err) {
-    logger.error({ err }, "Scalper: failed to fetch top symbols");
-    return [];
+  if (params.symbols && params.symbols.length > 0) {
+    symbols = params.symbols;
+  } else {
+    try {
+      symbols = await getTopUsdtSymbols(5);
+    } catch (err) {
+      logger.error({ err }, "Scalper: failed to fetch top symbols");
+      return [];
+    }
   }
 
   const results = await Promise.allSettled(

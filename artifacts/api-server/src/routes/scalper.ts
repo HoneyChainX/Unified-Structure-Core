@@ -22,12 +22,13 @@ router.put("/config", async (req, res): Promise<void> => {
   const body = req.body as Record<string, unknown>;
   const allowed = [
     "enabled", "paperMode", "longOnly",
-    "positionSizeUsdt", "targetProfitUsdt", "slPct",
+    "positionSizeUsdt", "positionSizePct", "targetProfitUsdt", "slPct",
     "maxOpenTrades", "cooldownMinutes",
     "bbPeriod", "bbStdDev",
     "rsiPeriod", "rsiOversold", "rsiOverbought",
     "volumeSpikeMultiplier",
     "compoundingEnabled", "compoundBalance",
+    "symbolAllowlist",
   ];
   const update: Record<string, unknown> = { updatedAt: new Date() };
   for (const key of allowed) {

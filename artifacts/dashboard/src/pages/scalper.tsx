@@ -25,6 +25,7 @@ interface ScalperConfig {
   enabled: boolean;
   paperMode: boolean;
   positionSizeUsdt: number;
+  positionSizePct: number | null;
   targetProfitUsdt: number;
   slPct: number;
   maxOpenTrades: number;
@@ -38,6 +39,7 @@ interface ScalperConfig {
   compoundingEnabled: boolean;
   compoundBalance: number | null;
   longOnly: boolean;
+  symbolAllowlist: string | null;
   updatedAt: string;
 }
 
@@ -604,14 +606,45 @@ export function ScalperPage() {
           </div>
 
           {/* Position Size */}
-          <div className="space-y-2">
-            <label className="text-xs text-muted-foreground tracking-widest">POSITION SIZE (USDT)</label>
-            <input
-              type="number" min={1}
-              value={field("positionSizeUsdt", 50) as number}
-              onChange={(e) => set("positionSizeUsdt", parseFloat(e.target.value))}
-              className="w-full bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary"
-            />
+          <div className="space-y-3">
+            <label className="text-xs text-muted-foreground tracking-widest">POSITION SIZE</label>
+            {/* Mode toggle */}
+            <div className="flex gap-2">
+              <button
+                onClick={() => { set("positionSizePct", null); }}
+                className={`flex-1 py-1.5 text-xs font-mono border transition-colors ${(field("positionSizePct", null) == null) ? "border-primary bg-primary/10 text-primary" : "border-border bg-secondary text-muted-foreground"}`}
+              >FIXED USDT</button>
+              <button
+                onClick={() => { if (field("positionSizePct", null) == null) set("positionSizePct", 30); }}
+                className={`flex-1 py-1.5 text-xs font-mono border transition-colors ${(field("positionSizePct", null) != null) ? "border-cyan-500 bg-cyan-500/10 text-cyan-400" : "border-border bg-secondary text-muted-foreground"}`}
+              >% OF BALANCE</button>
+            </div>
+            {field("positionSizePct", null) == null ? (
+              <>
+                <input
+                  type="number" min={1}
+                  value={field("positionSizeUsdt", 50) as number}
+                  onChange={(e) => set("positionSizeUsdt", parseFloat(e.target.value))}
+                  className="w-full bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary"
+                />
+                <p className="text-xs text-muted-foreground">Fixed USDT amount per trade</p>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number" min={1} max={100}
+                    value={field("positionSizePct", 30) as number}
+                    onChange={(e) => set("positionSizePct", parseFloat(e.target.value))}
+                    className="flex-1 bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-cyan-500"
+                  />
+                  <span className="text-cyan-400 font-mono font-bold text-lg">%</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Uses this % of your live USDT balance per trade — compounds automatically as balance grows
+                </p>
+              </>
+            )}
           </div>
 
           {/* Max Open Trades */}
@@ -649,6 +682,23 @@ export function ScalperPage() {
             >
               <span className={`absolute top-0.5 w-5 h-5 rounded-full transition-all ${field("compoundingEnabled", false) ? "left-6 bg-yellow-400" : "left-0.5 bg-muted-foreground/50"}`} />
             </button>
+          </div>
+
+          {/* Symbol Allowlist */}
+          <div className="space-y-2">
+            <label className="text-xs text-muted-foreground tracking-widest flex items-center gap-2">
+              <span className="text-orange-400">▣</span> API SYMBOL ALLOWLIST
+            </label>
+            <textarea
+              rows={3}
+              placeholder={"BTC_USDT, ETH_USDT, SOL_USDT\n(leave blank = auto top-5 by volume)"}
+              value={(field("symbolAllowlist", null) as string | null) ?? ""}
+              onChange={(e) => set("symbolAllowlist", e.target.value.trim() === "" ? null : e.target.value)}
+              className="w-full bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-orange-400 resize-none"
+            />
+            <p className="text-xs text-muted-foreground">
+              Restrict scanning to these Gate.io pairs — required if your API key has a trading pair allowlist. Comma-separated, e.g. <span className="font-mono text-orange-400/80">BTC_USDT, ETH_USDT</span>
+            </p>
           </div>
         </div>
 

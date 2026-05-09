@@ -8,11 +8,16 @@ export const scalperConfigTable = pgTable("scalper_config", {
   paperMode: boolean("paper_mode").notNull().default(true),
 
   positionSizeUsdt: real("position_size_usdt").notNull().default(50),
+  positionSizePct: real("position_size_pct"),           // % of live USDT balance per trade (overrides fixed if set)
   targetProfitUsdt: real("target_profit_usdt").notNull().default(2),
   slPct: real("sl_pct").notNull().default(0.5),
 
   maxOpenTrades: integer("max_open_trades").notNull().default(3),
   cooldownMinutes: integer("cooldown_minutes").notNull().default(5),
+
+  // Symbol allowlist (comma-separated Gate.io pairs, e.g. "BTC_USDT,ETH_USDT")
+  // null = scan top-5 by volume (default)
+  symbolAllowlist: text("symbol_allowlist"),
 
   // Bollinger Band params
   bbPeriod: integer("bb_period").notNull().default(20),

@@ -93,10 +93,21 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
   }
 
   // ── Position sizing ──────────────────────────────────────────────────────
-  const positionSize =
-    config.compoundingEnabled && config.compoundBalance != null
-      ? config.compoundBalance
-      : config.positionSizeUsdt;
+  // Priority: % of live balance > compounding balance > fixed USDT
+  let positionSize: number;
+  if (config.positionSizePct != null && config.positionSizePct > 0) {
+    try {
+      const liveBalance = await getUsdtBalance();
+      positionSize = liveBalance * (config.positionSizePct / 100);
+      logger.debug({ liveBalance, positionSizePct: config.positionSizePct, positionSize }, "Scalper: % position sizing");
+    } catch {
+      positionSize = config.positionSizeUsdt; // fallback if balance fetch fails
+    }
+  } else if (config.compoundingEnabled && config.compoundBalance != null) {
+    positionSize = config.compoundBalance;
+  } else {
+    positionSize = config.positionSizeUsdt;
+  }
 
   const entryPrice = signal.entryPrice;
   const quantity = positionSize / entryPrice;
