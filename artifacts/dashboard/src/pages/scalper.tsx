@@ -64,6 +64,7 @@ interface ScalperConfig {
   positionSizeUsdt: number;
   positionSizePct: number | null;
   targetProfitUsdt: number;
+  targetProfitPct: number | null;
   slPct: number;
   maxOpenTrades: number;
   cooldownMinutes: number;
@@ -73,6 +74,8 @@ interface ScalperConfig {
   rsiOversold: number;
   rsiOverbought: number;
   volumeSpikeMultiplier: number;
+  emaFilterEnabled: boolean;
+  emaPeriod: number;
   compoundingEnabled: boolean;
   compoundBalance: number | null;
   longOnly: boolean;
@@ -615,17 +618,44 @@ export function ScalperPage() {
           </div>
 
           {/* Target Profit */}
-          <div className="space-y-2">
+          <div className="space-y-3">
             <label className="text-xs text-muted-foreground tracking-widest flex items-center gap-2">
-              <DollarSign className="w-3 h-3" />TARGET PROFIT PER TRADE (USDT)
+              <DollarSign className="w-3 h-3" />TARGET PROFIT PER TRADE
             </label>
-            <input
-              type="number" min={0.1} step={0.5}
-              value={field("targetProfitUsdt", 2) as number}
-              onChange={(e) => set("targetProfitUsdt", parseFloat(e.target.value))}
-              className="w-full bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary"
-            />
-            <p className="text-xs text-muted-foreground">TP is auto-set to achieve this $ profit on the full position</p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => set("targetProfitPct", null)}
+                className={`flex-1 py-1.5 text-xs font-mono border transition-colors ${field("targetProfitPct", null) == null ? "border-primary bg-primary/10 text-primary" : "border-border bg-secondary text-muted-foreground"}`}
+              >FIXED USDT</button>
+              <button
+                onClick={() => { if (field("targetProfitPct", null) == null) set("targetProfitPct", 1); }}
+                className={`flex-1 py-1.5 text-xs font-mono border transition-colors ${field("targetProfitPct", null) != null ? "border-emerald-500 bg-emerald-500/10 text-emerald-400" : "border-border bg-secondary text-muted-foreground"}`}
+              >% OF ENTRY</button>
+            </div>
+            {field("targetProfitPct", null) == null ? (
+              <>
+                <input
+                  type="number" min={0.1} step={0.5}
+                  value={field("targetProfitUsdt", 2) as number}
+                  onChange={(e) => set("targetProfitUsdt", parseFloat(e.target.value))}
+                  className="w-full bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary"
+                />
+                <p className="text-xs text-muted-foreground">TP placed to achieve this fixed $ profit on the full position</p>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number" min={0.1} max={20} step={0.1}
+                    value={field("targetProfitPct", 1) as number}
+                    onChange={(e) => set("targetProfitPct", parseFloat(e.target.value))}
+                    className="flex-1 bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-emerald-500"
+                  />
+                  <span className="text-emerald-400 font-mono font-bold text-lg">%</span>
+                </div>
+                <p className="text-xs text-muted-foreground">TP placed this % above entry (long) or below (short) — adapts to any position size</p>
+              </>
+            )}
           </div>
 
           {/* SL % */}
@@ -753,34 +783,64 @@ export function ScalperPage() {
             onClick={() => setShowAdvanced((v) => !v)}
             className="w-full flex items-center justify-between px-4 py-3 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/20 transition-colors"
           >
-            <span className="tracking-widest font-bold">SIGNAL PARAMETERS (BB / RSI / VOLUME)</span>
+            <span className="tracking-widest font-bold">SIGNAL PARAMETERS (BB / RSI / EMA / VOLUME)</span>
             {showAdvanced ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
           </button>
 
           {showAdvanced && (
-            <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-4 bg-secondary/10">
-              {[
-                { key: "bbPeriod", label: "BB PERIOD", min: 5, max: 50, step: 1, fallback: 20 },
-                { key: "bbStdDev", label: "BB STD DEV (σ)", min: 1, max: 4, step: 0.1, fallback: 2.0 },
-                { key: "rsiPeriod", label: "RSI PERIOD", min: 5, max: 30, step: 1, fallback: 14 },
-                { key: "rsiOversold", label: "RSI OVERSOLD", min: 10, max: 45, step: 1, fallback: 35 },
-                { key: "rsiOverbought", label: "RSI OVERBOUGHT", min: 55, max: 90, step: 1, fallback: 65 },
-                { key: "volumeSpikeMultiplier", label: "VOLUME SPIKE (×)", min: 1, max: 5, step: 0.1, fallback: 1.5 },
-              ].map(({ key, label, min, max, step, fallback }) => (
-                <div key={key} className="space-y-1.5">
-                  <label className="text-xs text-muted-foreground tracking-widest">{label}</label>
+            <div className="p-4 space-y-4 bg-secondary/10">
+              {/* EMA Trend Filter */}
+              <div className="flex items-center justify-between p-3 border border-border bg-secondary/30">
+                <div>
+                  <div className="text-sm font-bold mb-0.5 flex items-center gap-2">
+                    <span className="text-yellow-400 font-mono text-xs">EMA</span> Trend Filter
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Only LONG when price &gt; {field("emaPeriod", 50)}-EMA (uptrend). Only SHORT when price &lt; EMA (downtrend). Blocks mean-reversion against the trend.
+                  </div>
+                </div>
+                <button
+                  onClick={() => set("emaFilterEnabled", !field("emaFilterEnabled", true))}
+                  className={`ml-4 relative w-12 h-6 flex-shrink-0 rounded-full border transition-colors ${field("emaFilterEnabled", true) ? "border-yellow-500 bg-yellow-500/20" : "border-border bg-secondary"}`}
+                >
+                  <span className={`absolute top-0.5 w-5 h-5 rounded-full transition-all ${field("emaFilterEnabled", true) ? "left-6 bg-yellow-400" : "left-0.5 bg-muted-foreground/50"}`} />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs text-muted-foreground tracking-widest">EMA PERIOD</label>
                   <input
-                    type="number" min={min} max={max} step={step}
-                    value={field(key as keyof ScalperConfig, fallback) as number}
-                    onChange={(e) => set(key as keyof ScalperConfig, parseFloat(e.target.value) as never)}
-                    className="w-full bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary"
+                    type="number" min={5} max={200} step={1}
+                    value={field("emaPeriod", 50) as number}
+                    onChange={(e) => set("emaPeriod", parseInt(e.target.value))}
+                    className="w-full bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-yellow-400"
                   />
                 </div>
-              ))}
-              <div className="md:col-span-3 text-xs text-muted-foreground bg-secondary/30 border border-border p-3 space-y-1">
-                <div>Entry conditions (all three must be met simultaneously):</div>
-                <div className="text-green-400">LONG: price ≤ BB lower  AND  RSI ≤ oversold  AND  volume ≥ {fmt(field("volumeSpikeMultiplier", 1.5), 1)}× 20-period avg</div>
-                <div className="text-red-400">SHORT: price ≥ BB upper  AND  RSI ≥ overbought  AND  volume ≥ {fmt(field("volumeSpikeMultiplier", 1.5), 1)}× 20-period avg</div>
+                {[
+                  { key: "bbPeriod", label: "BB PERIOD", min: 5, max: 50, step: 1, fallback: 20 },
+                  { key: "bbStdDev", label: "BB STD DEV (σ)", min: 1, max: 4, step: 0.1, fallback: 2.0 },
+                  { key: "rsiPeriod", label: "RSI PERIOD", min: 5, max: 30, step: 1, fallback: 14 },
+                  { key: "rsiOversold", label: "RSI OVERSOLD", min: 10, max: 45, step: 1, fallback: 30 },
+                  { key: "rsiOverbought", label: "RSI OVERBOUGHT", min: 55, max: 90, step: 1, fallback: 70 },
+                  { key: "volumeSpikeMultiplier", label: "VOLUME SPIKE (×)", min: 1, max: 5, step: 0.1, fallback: 1.5 },
+                ].map(({ key, label, min, max, step, fallback }) => (
+                  <div key={key} className="space-y-1.5">
+                    <label className="text-xs text-muted-foreground tracking-widest">{label}</label>
+                    <input
+                      type="number" min={min} max={max} step={step}
+                      value={field(key as keyof ScalperConfig, fallback) as number}
+                      onChange={(e) => set(key as keyof ScalperConfig, parseFloat(e.target.value) as never)}
+                      className="w-full bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div className="text-xs text-muted-foreground bg-secondary/30 border border-border p-3 space-y-1">
+                <div>Entry conditions (all must be met simultaneously):</div>
+                <div className="text-green-400">LONG: price ≤ BB lower  AND  RSI ≤ {field("rsiOversold", 30)}  AND  volume ≥ {fmt(field("volumeSpikeMultiplier", 1.5), 1)}×{field("emaFilterEnabled", true) ? "  AND  price > EMA" : ""}</div>
+                <div className="text-red-400">SHORT: price ≥ BB upper  AND  RSI ≥ {field("rsiOverbought", 70)}  AND  volume ≥ {fmt(field("volumeSpikeMultiplier", 1.5), 1)}×{field("emaFilterEnabled", true) ? "  AND  price < EMA" : ""}</div>
               </div>
             </div>
           )}

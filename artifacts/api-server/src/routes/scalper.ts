@@ -4,7 +4,7 @@ import { eq, desc, count, inArray } from "drizzle-orm";
 import { getUsdtBalance, getLivePrice, placeSpotOrder, cancelPriceTriggeredOrder, getApiKeyDetail } from "../services/gateio";
 import { scalperLastSyncAt } from "../services/scalper-sync";
 import { scalperLoopLastRunAt, scalperLoopLastSignalCount, runScalperScan } from "../services/scalper-loop";
-import { getTopUsdtSymbols, fetchCandles, computeBB, computeRSI, computeVolumeRatio } from "../services/scalper-signals";
+import { getTopUsdtSymbols, fetchCandles, computeBB, computeRSI, computeVolumeRatio, computeEMA } from "../services/scalper-signals";
 
 const router = Router();
 
@@ -22,11 +22,12 @@ router.put("/config", async (req, res): Promise<void> => {
   const body = req.body as Record<string, unknown>;
   const allowed = [
     "enabled", "paperMode", "longOnly",
-    "positionSizeUsdt", "positionSizePct", "targetProfitUsdt", "slPct",
+    "positionSizeUsdt", "positionSizePct", "targetProfitUsdt", "targetProfitPct", "slPct",
     "maxOpenTrades", "cooldownMinutes",
     "bbPeriod", "bbStdDev",
     "rsiPeriod", "rsiOversold", "rsiOverbought",
     "volumeSpikeMultiplier",
+    "emaFilterEnabled", "emaPeriod",
     "compoundingEnabled", "compoundBalance",
     "symbolAllowlist",
   ];
@@ -282,27 +283,32 @@ router.post("/scan/symbol", async (req, res): Promise<void> => {
   const bbPeriod = config?.bbPeriod ?? 20;
   const bbStdDev = config?.bbStdDev ?? 2.0;
   const rsiPeriod = config?.rsiPeriod ?? 14;
-  const rsiOversold = config?.rsiOversold ?? 35;
-  const rsiOverbought = config?.rsiOverbought ?? 65;
+  const rsiOversold = config?.rsiOversold ?? 30;
+  const rsiOverbought = config?.rsiOverbought ?? 70;
   const volumeSpikeMultiplier = config?.volumeSpikeMultiplier ?? 1.5;
+  const emaFilterEnabled = config?.emaFilterEnabled ?? true;
+  const emaPeriod = config?.emaPeriod ?? 50;
 
   try {
-    const candles = await fetchCandles(gateSymbol, "5m", 60);
+    const candles = await fetchCandles(gateSymbol, "5m", 120);
     const closes = candles.map((c) => c.close);
     const volumes = candles.map((c) => c.volume);
 
     const bb = computeBB(closes, bbPeriod, bbStdDev);
     const rsi = computeRSI(closes, rsiPeriod);
     const volumeRatio = computeVolumeRatio(volumes);
+    const ema = computeEMA(closes, emaPeriod);
     const lastClose = closes[closes.length - 1];
 
     const hasVolumeSpike = volumeRatio >= volumeSpikeMultiplier;
     const nearLower = lastClose <= bb.lower * 1.001;
     const nearUpper = lastClose >= bb.upper * 0.999;
-    const longSignal = lastClose <= bb.lower && rsi <= rsiOversold && hasVolumeSpike;
-    const shortSignal = lastClose >= bb.upper && rsi >= rsiOverbought && hasVolumeSpike;
+    const trendAllowsLong = !emaFilterEnabled || lastClose > ema;
+    const trendAllowsShort = !emaFilterEnabled || lastClose < ema;
+    const longSignal = lastClose <= bb.lower && rsi <= rsiOversold && hasVolumeSpike && trendAllowsLong;
+    const shortSignal = lastClose >= bb.upper && rsi >= rsiOverbought && hasVolumeSpike && trendAllowsShort;
 
-    req.log.info({ gateSymbol, lastClose, rsi, volumeRatio }, "Manual symbol scan");
+    req.log.info({ gateSymbol, lastClose, rsi, volumeRatio, ema }, "Manual symbol scan");
 
     res.json({
       gateSymbol,
@@ -312,6 +318,11 @@ router.post("/scan/symbol", async (req, res): Promise<void> => {
       bbMid: parseFloat(bb.mid.toFixed(8)),
       rsi: parseFloat(rsi.toFixed(2)),
       volumeRatio: parseFloat(volumeRatio.toFixed(3)),
+      ema: parseFloat(ema.toFixed(8)),
+      emaPeriod,
+      emaFilterEnabled,
+      trendAllowsLong,
+      trendAllowsShort,
       nearLower,
       nearUpper,
       longSignal,

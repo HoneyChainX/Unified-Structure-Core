@@ -127,6 +127,18 @@ export function computeVolumeRatio(volumes: number[], avgPeriod = 20): number {
 
 // ── Signal evaluation ───────────────────────────────────────────────────────
 
+// ── EMA ──────────────────────────────────────────────────────────────────────
+
+export function computeEMA(values: number[], period: number): number {
+  if (values.length < period) return values[values.length - 1];
+  const k = 2 / (period + 1);
+  let ema = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < values.length; i++) {
+    ema = values[i] * k + ema * (1 - k);
+  }
+  return ema;
+}
+
 export interface SignalParams {
   bbPeriod: number;
   bbStdDev: number;
@@ -135,6 +147,8 @@ export interface SignalParams {
   rsiOverbought: number;
   volumeSpikeMultiplier: number;
   longOnly: boolean;
+  emaFilterEnabled: boolean;
+  emaPeriod: number;
   /** Override the symbol list — skips top-5 fetch when provided */
   symbols?: string[];
 }
@@ -144,7 +158,7 @@ export function evaluateSignal(
   candles: Candle[],
   params: SignalParams
 ): ScalperSignal | null {
-  if (candles.length < Math.max(params.bbPeriod, params.rsiPeriod) + 2) {
+  if (candles.length < Math.max(params.bbPeriod, params.rsiPeriod, params.emaPeriod) + 2) {
     logger.debug({ gateSymbol, count: candles.length }, "Not enough candles for signal evaluation");
     return null;
   }
@@ -156,11 +170,14 @@ export function evaluateSignal(
   const bb = computeBB(closes, params.bbPeriod, params.bbStdDev);
   const rsi = computeRSI(closes, params.rsiPeriod);
   const volumeRatio = computeVolumeRatio(volumes);
+  const ema = params.emaFilterEnabled ? computeEMA(closes, params.emaPeriod) : null;
 
   const hasVolumeSpike = volumeRatio >= params.volumeSpikeMultiplier;
   const symbol = gateSymbol.replace("_", "");
 
-  if (lastClose <= bb.lower && rsi <= params.rsiOversold && hasVolumeSpike) {
+  // LONG: price at/below lower BB, RSI oversold, volume spike, and (if EMA filter on) price above EMA (uptrend)
+  const trendAllowsLong = !params.emaFilterEnabled || ema === null || lastClose > ema;
+  if (lastClose <= bb.lower && rsi <= params.rsiOversold && hasVolumeSpike && trendAllowsLong) {
     return {
       symbol,
       gateSymbol,
@@ -174,7 +191,9 @@ export function evaluateSignal(
     };
   }
 
-  if (!params.longOnly && lastClose >= bb.upper && rsi >= params.rsiOverbought && hasVolumeSpike) {
+  // SHORT: price at/above upper BB, RSI overbought, volume spike, and (if EMA filter on) price below EMA (downtrend)
+  const trendAllowsShort = !params.emaFilterEnabled || ema === null || lastClose < ema;
+  if (!params.longOnly && lastClose >= bb.upper && rsi >= params.rsiOverbought && hasVolumeSpike && trendAllowsShort) {
     return {
       symbol,
       gateSymbol,

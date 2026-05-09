@@ -45,6 +45,8 @@ export async function runScalperScan(): Promise<void> {
     rsiOverbought: config.rsiOverbought,
     volumeSpikeMultiplier: config.volumeSpikeMultiplier,
     longOnly: config.longOnly,
+    emaFilterEnabled: config.emaFilterEnabled,
+    emaPeriod: config.emaPeriod,
     symbols: allowlistSymbols ?? undefined,
   });
 

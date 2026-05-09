@@ -127,10 +127,15 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
   const entryPrice = signal.entryPrice;
   const quantity = positionSize / entryPrice;
 
-  // TP: achieve targetProfitUsdt on full position
-  // price move needed = targetProfitUsdt / quantity
-  const tpMove = config.targetProfitUsdt / quantity;
-  const tpPrice = signal.side === "buy" ? entryPrice + tpMove : entryPrice - tpMove;
+  // TP: % of entry takes priority over fixed USDT target
+  let tpPrice: number;
+  if (config.targetProfitPct != null && config.targetProfitPct > 0) {
+    const tpMove = entryPrice * (config.targetProfitPct / 100);
+    tpPrice = signal.side === "buy" ? entryPrice + tpMove : entryPrice - tpMove;
+  } else {
+    const tpMove = config.targetProfitUsdt / quantity;
+    tpPrice = signal.side === "buy" ? entryPrice + tpMove : entryPrice - tpMove;
+  }
 
   // SL: slPct% against entry
   const slMove = entryPrice * (config.slPct / 100);

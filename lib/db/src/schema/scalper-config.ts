@@ -25,11 +25,18 @@ export const scalperConfigTable = pgTable("scalper_config", {
 
   // RSI params
   rsiPeriod: integer("rsi_period").notNull().default(14),
-  rsiOversold: real("rsi_oversold").notNull().default(35),
-  rsiOverbought: real("rsi_overbought").notNull().default(65),
+  rsiOversold: real("rsi_oversold").notNull().default(30),
+  rsiOverbought: real("rsi_overbought").notNull().default(70),
 
   // Volume spike threshold (multiplier vs 20-period avg)
   volumeSpikeMultiplier: real("volume_spike_multiplier").notNull().default(1.5),
+
+  // TP as % of entry price (overrides fixed USDT target when set)
+  targetProfitPct: real("target_profit_pct"),
+
+  // EMA trend filter — only longs above EMA, shorts below
+  emaFilterEnabled: boolean("ema_filter_enabled").notNull().default(true),
+  emaPeriod: integer("ema_period").notNull().default(50),
 
   // Compounding
   compoundingEnabled: boolean("compounding_enabled").notNull().default(false),
