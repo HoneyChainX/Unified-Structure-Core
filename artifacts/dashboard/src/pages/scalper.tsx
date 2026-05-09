@@ -20,39 +20,96 @@ async function api<T>(path: string, opts?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-function SyncAllowlistButton({ onSync }: { onSync: (pairs: string[]) => void }) {
-  const [state, setState] = useState<"idle" | "loading" | "ok" | "err">("idle");
-  const [msg, setMsg] = useState("");
+interface GateKeyStatus {
+  pairs: string[];
+  unrestricted: boolean;
+}
 
-  async function sync() {
-    setState("loading");
-    setMsg("");
+function GateKeyRestrictionPanel({ onSync }: { onSync: (pairs: string[]) => void }) {
+  const [status, setStatus] = useState<GateKeyStatus | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function fetch() {
+    setLoading(true);
+    setError(null);
     try {
       const data = await api<{ pairs: string[]; unrestricted: boolean; error?: string }>("/api/scalper/gateio-allowlist");
       if (data.error) throw new Error(data.error);
-      onSync(data.pairs);
-      setMsg(data.unrestricted ? "No restrictions — all pairs allowed" : `${data.pairs.length} pairs synced`);
-      setState("ok");
+      setStatus(data);
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : "Failed");
-      setState("err");
+      setError(e instanceof Error ? e.message : "Failed to read key");
+    } finally {
+      setLoading(false);
     }
-    setTimeout(() => setState("idle"), 4000);
   }
 
   return (
-    <div className="flex items-center gap-2">
-      {msg && (
-        <span className={`text-xs font-mono ${state === "ok" ? "text-green-400" : "text-red-400"}`}>{msg}</span>
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <label className="text-xs text-muted-foreground tracking-widest flex items-center gap-2">
+          <span className="text-yellow-400">▣</span> GATE.IO API KEY RESTRICTION
+        </label>
+        <button
+          onClick={fetch}
+          disabled={loading}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono border border-yellow-500/50 bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20 transition-colors disabled:opacity-50"
+        >
+          <RefreshCw className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} />
+          CHECK KEY
+        </button>
+      </div>
+
+      {error && (
+        <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 p-2">{error}</div>
       )}
-      <button
-        onClick={sync}
-        disabled={state === "loading"}
-        className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono border border-orange-500/50 bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 transition-colors disabled:opacity-50"
-      >
-        <RefreshCw className={`w-3 h-3 ${state === "loading" ? "animate-spin" : ""}`} />
-        SYNC FROM GATE.IO
-      </button>
+
+      {status && (
+        status.unrestricted ? (
+          <div className="flex items-start gap-2 bg-green-500/10 border border-green-500/30 p-3 text-xs">
+            <span className="text-green-400 text-base leading-none mt-0.5">✓</span>
+            <div className="space-y-0.5">
+              <div className="text-green-400 font-bold">Key is unrestricted — all USDT pairs allowed</div>
+              <div className="text-muted-foreground">Your API key can place orders on any pair. Clear the bot filter below to trade the full scan pool.</div>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/30 p-3 text-xs">
+              <span className="text-red-400 text-base leading-none mt-0.5">⚠</span>
+              <div className="space-y-1">
+                <div className="text-red-400 font-bold">Key is restricted to {status.pairs.length} pair{status.pairs.length !== 1 ? "s" : ""}</div>
+                <div className="text-muted-foreground">
+                  Gate.io will <span className="text-red-300 font-bold">reject any order</span> outside this list — even if the bot's filter is cleared. This is set on Gate.io's website, not here.
+                </div>
+                <div className="font-mono text-foreground/70 mt-1 break-all">{status.pairs.join(", ")}</div>
+              </div>
+            </div>
+            <div className="bg-yellow-500/10 border border-yellow-500/30 p-3 text-xs space-y-1.5">
+              <div className="text-yellow-400 font-bold">To trade more pairs:</div>
+              <ol className="text-muted-foreground space-y-1 list-decimal list-inside">
+                <li>Go to <span className="font-mono text-foreground">gate.io → Account → API Management</span></li>
+                <li>Click <span className="font-mono text-foreground">Edit</span> on your API key</li>
+                <li>Under <span className="font-mono text-foreground">Trading Pairs</span>, clear all entries (leave empty = no restriction)</li>
+                <li>Save and re-enter your API secret if prompted</li>
+                <li>Click <span className="font-mono text-foreground">CHECK KEY</span> above to confirm</li>
+              </ol>
+            </div>
+            <button
+              onClick={() => onSync(status.pairs)}
+              className="text-xs font-mono text-yellow-400/70 hover:text-yellow-400 underline underline-offset-2"
+            >
+              Copy these pairs into the bot filter below →
+            </button>
+          </div>
+        )
+      )}
+
+      {!status && !loading && !error && (
+        <div className="text-xs text-muted-foreground bg-secondary/30 border border-border p-2">
+          Click CHECK KEY to read your API key's pair restrictions directly from Gate.io.
+        </div>
+      )}
     </div>
   );
 }
@@ -1013,13 +1070,15 @@ export function ScalperPage() {
             </button>
           </div>
 
-          {/* Trading Allowlist */}
+          {/* Gate.io key restriction checker */}
+          <GateKeyRestrictionPanel onSync={(pairs) => set("symbolAllowlist", pairs.length > 0 ? pairs.join(", ") : null)} />
+
+          {/* Bot-side Trading Allowlist */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="text-xs text-muted-foreground tracking-widest flex items-center gap-2">
-                <span className="text-orange-400">▣</span> API TRADING ALLOWLIST
+                <span className="text-orange-400">▣</span> BOT FILTER (OPTIONAL)
               </label>
-              <SyncAllowlistButton onSync={(pairs) => set("symbolAllowlist", pairs.length > 0 ? pairs.join(", ") : null)} />
             </div>
             <textarea
               rows={3}
