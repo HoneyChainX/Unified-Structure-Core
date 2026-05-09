@@ -192,12 +192,16 @@ export function evaluateSignal(
   const volumeRatio = computeVolumeRatio(volumes);
   const ema = params.emaFilterEnabled ? computeEMA(closes, params.emaPeriod) : null;
 
+  // Volume is a confirmation metric displayed on the signal, but NOT a hard gate.
+  // BB+RSI fires on price extremity + RSI confirmation alone — volume amplifies
+  // signal quality but should never silence a genuine oversold/overbought setup,
+  // especially during quiet-market hours when volume is structurally low.
   const hasVolumeSpike = volumeRatio >= params.volumeSpikeMultiplier;
   const symbol = gateSymbol.replace("_", "");
 
-  // LONG: price at/below lower BB, RSI oversold, volume spike, and (if EMA filter on) price above EMA (uptrend)
+  // LONG: price at/below lower BB AND RSI oversold — volume is informational only
   const trendAllowsLong = !params.emaFilterEnabled || ema === null || lastClose > ema;
-  if (lastClose <= bb.lower && rsi <= params.rsiOversold && hasVolumeSpike && trendAllowsLong) {
+  if (lastClose <= bb.lower && rsi <= params.rsiOversold && trendAllowsLong) {
     return {
       symbol,
       gateSymbol,
@@ -211,9 +215,9 @@ export function evaluateSignal(
     };
   }
 
-  // SHORT: price at/above upper BB, RSI overbought, volume spike, and (if EMA filter on) price below EMA (downtrend)
+  // SHORT: price at/above upper BB AND RSI overbought — volume is informational only
   const trendAllowsShort = !params.emaFilterEnabled || ema === null || lastClose < ema;
-  if (!params.longOnly && lastClose >= bb.upper && rsi >= params.rsiOverbought && hasVolumeSpike && trendAllowsShort) {
+  if (!params.longOnly && lastClose >= bb.upper && rsi >= params.rsiOverbought && trendAllowsShort) {
     return {
       symbol,
       gateSymbol,
@@ -226,6 +230,9 @@ export function evaluateSignal(
       volumeRatio,
     };
   }
+
+  // Suppress unused-variable warning — hasVolumeSpike kept for future scoring use
+  void hasVolumeSpike;
 
   return null;
 }

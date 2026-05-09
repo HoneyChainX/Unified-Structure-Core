@@ -107,15 +107,16 @@ Third strategy mode (`strategy = "cht"`) implemented alongside BB+RSI and SMC MS
 **11-Stage pipeline:**
 1. Trend Engine — EMA20/EMA50 alignment + ADX ≥ 18 (ranging = skip)
 2. HTF Confirmation — 1h EMA20/EMA50 must agree with 5m direction
-3. Volatility Engine — ATR% 0.3–8% scalp regime required
-4. Volume Engine — volumeRatio ≥ 1.0×, weak volume = skip
+3. Volatility Engine — ATR% by timeframe (0.08% 3m/5m, 0.15% 15m, 0.3% 1h+)
+4. Volume Engine — volumeRatio ≥ 0.3× (dead-volume gate only, not a quality filter)
 5. RSI — computed for trigger and divergence
 6. Market Structure — 3-bar swing high/low detection
-7. Trigger Engine — RETEST (25pts) > BREAKOUT (18pts) > REVERSAL (15pts)
+7. Trigger Engine — RETEST (25pts, rising tolerance 0.2%) > BREAKOUT (18pts) > REVERSAL (15pts, RSI 40–62)
 8. Risk Engine — TP = entry ± 1.5× SL distance (TP2 / 1.5R)
 9. Spread Intelligence — relative return vs BTC (alt-rotation proxy)
-10. Divergence Engine — RSI divergence (confidence boost)
-11. TAO Consensus — 6 expert votes; ≥ 4 required (Spread/Trend/EMA/Volume/Divergence/Rotation)
+10. Correlation Engine — BTC corr < 0.9; vol-price corr > −0.7 (negative corr normal in consolidation)
+11. Divergence Engine — RSI divergence (confidence boost)
+12. TAO Consensus — 6 expert votes; ≥ 4 required (Spread/Trend/EMA/Volume/Divergence/Rotation)
 
 **Opportunity Score** (0–100): Trend=20, HTF=20, Trigger=25, Volume=10, Volatility=10, Risk=15
 **Grades:** ELITE (85+), STRONG (75+), MEDIUM (60+), IGNORE (<60 — not emitted)

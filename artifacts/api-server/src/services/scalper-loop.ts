@@ -106,7 +106,7 @@ export let scalperLiveScanAt: Date | null = null;
 
 // ── Live scan (display only — always scans all 6 TFs) ─────────────────────
 
-async function runLiveDualScan(): Promise<void> {
+export async function runLiveDualScan(): Promise<void> {
   const [config] = await db.select().from(scalperConfigTable).limit(1);
 
   const scanPoolSize = config?.scanPoolSize ?? 20;

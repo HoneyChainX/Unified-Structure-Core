@@ -4,7 +4,7 @@ import { db, scalperConfigTable, scalperTradesTable } from "@workspace/db";
 import { eq, desc, count, inArray } from "drizzle-orm";
 import { getUsdtBalance, getLivePrice, placeSpotOrder, cancelPriceTriggeredOrder, getApiKeyDetail, fmtForPair } from "../services/gateio";
 import { scalperLastSyncAt } from "../services/scalper-sync";
-import { scalperLoopLastRunAt, scalperLoopLastSignalCount, scalperLiveScanResults, scalperLiveScanAt, runScalperScan } from "../services/scalper-loop";
+import { scalperLoopLastRunAt, scalperLoopLastSignalCount, scalperLiveScanResults, scalperLiveScanAt, runScalperScan, runLiveDualScan } from "../services/scalper-loop";
 import { getTopUsdtSymbols, fetchCandles, computeBB, computeRSI, computeVolumeRatio, computeEMA, evaluateSignal } from "../services/scalper-signals";
 import { evaluateSMCSignal } from "../services/scalper-signals-smc";
 import { computeADX, computeATR } from "../services/scalper-signals-cht";
@@ -495,6 +495,7 @@ router.get("/scan", async (req, res): Promise<void> => {
 
 router.post("/scan/trigger", async (req, res): Promise<void> => {
   runScalperScan().catch((err) => req.log.error({ err }, "Manual scalper scan failed"));
+  runLiveDualScan().catch((err) => req.log.error({ err }, "Manual live dual scan failed"));
   res.json({ ok: true, message: "Scan triggered" });
 });
 

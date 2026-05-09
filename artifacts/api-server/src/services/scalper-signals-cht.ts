@@ -149,7 +149,7 @@ function volumeScore(volumeRatio: number): number {
   if (volumeRatio >= 1.5) return 1.0;  // EXTREME / VERY STRONG
   if (volumeRatio >= 1.2) return 0.7;  // STRONG
   if (volumeRatio >= 1.0) return 0.4;  // NORMAL
-  if (volumeRatio >= 0.5) return 0.1;  // QUIET — below avg but not dead
+  if (volumeRatio >= 0.3) return 0.1;  // QUIET — structurally low, not dead
   return 0.0;                          // DEAD — skip
 }
 
@@ -193,7 +193,7 @@ function detectTrigger(
       }
       if (!wasBroken) continue;
       const pct = Math.abs(lastClose - ref.price) / ref.price;
-      if (pct < 0.012 && lastClose >= prevClose && lastClose > ref.price * 0.995) {
+      if (pct < 0.012 && lastClose >= prevClose * 0.998 && lastClose > ref.price * 0.995) {
         const sl = Math.min(...candles.slice(-4).map(c => c.low)) - 0.8 * atr;
         return { type: "RETEST", sl, triggerQuality: 25 };
       }
@@ -432,13 +432,15 @@ export function evaluateCHTSignal(
     const corrBtc = pearsonCorr(closes.slice(-20), btcCloses.slice(-20));
     if (corrBtc >= 0.9) return null;
 
-    // corr(volume, ROC(close,1), 14) > 0.2 — loose confirmation; crypto volume often leads/lags
+    // corr(volume, ROC(close,1), 14) — only reject strong inverse correlation (≤ -0.7).
+    // Positive or neutral vol-price correlation is fine; negative correlation is common during
+    // consolidation (volume peaks on down candles, price grinds up) and must not be a hard block.
     if (closes.length >= 15 && volumes.length >= 14) {
       const roc = closes.slice(-(14 + 1)).map((c, i, arr) =>
         i === 0 ? 0 : (c - arr[i - 1]) / Math.max(arr[i - 1], 1e-12)
       ).slice(1);
       const corrVolPrice = pearsonCorr(volumes.slice(-14), roc);
-      if (corrVolPrice < 0.2) return null;
+      if (corrVolPrice < -0.7) return null;
     }
   }
 
