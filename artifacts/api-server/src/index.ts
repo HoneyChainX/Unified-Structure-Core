@@ -27,5 +27,5 @@ app.listen(port, (err) => {
   logger.info({ port }, "Server listening");
   startSyncLoop(30_000);
   startScalperSyncLoop(30_000);
-  startScalperLoop(5 * 60_000);
+  startScalperLoop(2.5 * 60_000);
 });

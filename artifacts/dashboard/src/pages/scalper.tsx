@@ -130,6 +130,28 @@ interface ScalperPerformance {
   worstPnl: number | null;
 }
 
+interface LiveScanEntry {
+  gateSymbol: string;
+  lastClose: number;
+  bbRsi: {
+    detected: boolean;
+    side: "buy" | "sell" | null;
+    rsi: number | null;
+    volumeRatio: number | null;
+    tp: number | null;
+    sl: number | null;
+  };
+  smc: {
+    detected: boolean;
+    side: "buy" | "sell" | null;
+    tp: number | null;
+    sl: number | null;
+    obHigh: number | null;
+    obLow: number | null;
+    mssLevel: number | null;
+  };
+}
+
 interface ScanRow {
   gateSymbol: string;
   lastClose?: number;
@@ -234,6 +256,8 @@ export function ScalperPage() {
   // Closed history: poll every 60s (static data — only grows)
   const { data: closedTrades_, refetch: refetchClosed } = useFetch<ScalperTrade[]>("/api/scalper/trades?status=closed,cancelled&limit=200", 60000);
   const { data: perf, refetch: refetchPerf } = useFetch<ScalperPerformance>("/api/scalper/performance");
+  // Live dual-strategy scan: poll every 30s
+  const { data: liveScan } = useFetch<{ results: LiveScanEntry[]; scannedAt: string | null }>("/api/scalper/scan/live", 30000);
 
   const cfg = { ...config, ...draft } as ScalperConfig;
 
@@ -526,6 +550,106 @@ export function ScalperPage() {
         </div>
       )}
 
+      {/* ─── Live signal monitor ─────────────────────────────────────────────── */}
+      <div className="border border-border">
+        <div className="flex items-center justify-between p-3 border-b border-border">
+          <span className="text-xs font-bold tracking-widest flex items-center gap-2">
+            <Zap className="w-3.5 h-3.5 text-yellow-400" />LIVE SIGNAL MONITOR
+            {liveScan?.scannedAt && (
+              <span className="text-muted-foreground font-normal normal-case">
+                — scanned {new Date(liveScan.scannedAt).toLocaleTimeString()} · refreshes every 2.5 min
+              </span>
+            )}
+          </span>
+          <div className="flex items-center gap-3">
+            {liveScan?.results && liveScan.results.some((r) => r.bbRsi.detected || r.smc.detected) && (
+              <span className="text-xs font-mono text-yellow-400 font-bold animate-pulse">
+                {liveScan.results.filter((r) => r.bbRsi.detected || r.smc.detected).length} SIGNAL{liveScan.results.filter((r) => r.bbRsi.detected || r.smc.detected).length !== 1 ? "S" : ""} ACTIVE
+              </span>
+            )}
+            {!liveScan?.scannedAt && (
+              <span className="text-xs text-muted-foreground">Waiting for first scan…</span>
+            )}
+          </div>
+        </div>
+        {liveScan?.results && liveScan.results.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs font-mono">
+              <thead>
+                <tr className="border-b border-border text-muted-foreground">
+                  <th className="text-left px-3 py-2">SYMBOL</th>
+                  <th className="text-left px-3 py-2">PRICE</th>
+                  <th className="text-left px-3 py-2">RSI</th>
+                  <th className="text-left px-3 py-2">VOL×</th>
+                  <th className="text-left px-3 py-2 text-cyan-400">BB+RSI</th>
+                  <th className="text-left px-3 py-2 text-violet-400">SMC MSS+OB</th>
+                </tr>
+              </thead>
+              <tbody>
+                {liveScan.results
+                  .slice()
+                  .sort((a, b) => {
+                    const aHit = (a.bbRsi.detected ? 2 : 0) + (a.smc.detected ? 1 : 0);
+                    const bHit = (b.bbRsi.detected ? 2 : 0) + (b.smc.detected ? 1 : 0);
+                    return bHit - aHit;
+                  })
+                  .map((row) => {
+                    const anySignal = row.bbRsi.detected || row.smc.detected;
+                    const bothSignals = row.bbRsi.detected && row.smc.detected;
+                    return (
+                      <tr
+                        key={row.gateSymbol}
+                        className={`border-b border-border/50 transition-colors ${
+                          bothSignals ? "bg-yellow-500/10 hover:bg-yellow-500/15" :
+                          anySignal ? "bg-primary/5 hover:bg-primary/10" :
+                          "hover:bg-secondary/20"
+                        }`}
+                      >
+                        <td className={`px-3 py-2.5 font-bold ${anySignal ? "text-foreground" : "text-muted-foreground"}`}>
+                          {row.gateSymbol.replace("_USDT", "")}
+                          {bothSignals && <span className="ml-1.5 text-yellow-400 text-xs">★</span>}
+                        </td>
+                        <td className="px-3 py-2.5">{row.lastClose.toPrecision(6)}</td>
+                        <td className={`px-3 py-2.5 ${row.bbRsi.rsi != null && row.bbRsi.rsi <= 35 ? "text-green-400 font-bold" : row.bbRsi.rsi != null && row.bbRsi.rsi >= 65 ? "text-red-400 font-bold" : ""}`}>
+                          {row.bbRsi.rsi != null ? row.bbRsi.rsi.toFixed(1) : "—"}
+                        </td>
+                        <td className={`px-3 py-2.5 ${row.bbRsi.volumeRatio != null && row.bbRsi.volumeRatio >= 1.5 ? "text-yellow-400 font-bold" : "text-muted-foreground"}`}>
+                          {row.bbRsi.volumeRatio != null ? `${row.bbRsi.volumeRatio.toFixed(2)}×` : "—"}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          {row.bbRsi.detected ? (
+                            <span className={`inline-flex items-center gap-1 font-bold px-2 py-0.5 border ${row.bbRsi.side === "buy" ? "text-green-300 border-green-500/50 bg-green-500/15" : "text-red-300 border-red-500/50 bg-red-500/15"}`}>
+                              {row.bbRsi.side === "buy" ? <><ArrowUpRight className="w-3 h-3" />LONG</> : <><ArrowDownRight className="w-3 h-3" />SHORT</>}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground/50">—</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          {row.smc.detected ? (
+                            <span className={`inline-flex items-center gap-1 font-bold px-2 py-0.5 border ${row.smc.side === "buy" ? "text-green-300 border-green-500/50 bg-green-500/15" : "text-red-300 border-red-500/50 bg-red-500/15"}`}>
+                              {row.smc.side === "buy" ? <><ArrowUpRight className="w-3 h-3" />LONG</> : <><ArrowDownRight className="w-3 h-3" />SHORT</>}
+                              {row.smc.obHigh != null && (
+                                <span className="text-violet-300/70 ml-1 font-normal">OB {row.smc.obLow?.toPrecision(5)}–{row.smc.obHigh?.toPrecision(5)}</span>
+                              )}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground/50">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="p-6 text-center text-muted-foreground text-sm">
+            {liveScan?.scannedAt ? "No symbols in scan results — check allowlist configuration" : "First scan runs 10 seconds after server start…"}
+          </div>
+        )}
+      </div>
+
       {/* ─── Open trades ─────────────────────────────────────────────────────── */}
       <div className="border border-border">
         <div className="flex items-center justify-between p-3 border-b border-border">
@@ -675,32 +799,46 @@ export function ScalperPage() {
 
         <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Paper Mode */}
-          <div className="flex items-center justify-between p-4 border border-border bg-secondary/30">
+          <div className={`flex items-center justify-between p-4 border transition-colors ${field("paperMode", true) ? "border-violet-500/60 bg-violet-500/10" : "border-green-500/60 bg-green-500/10"}`}>
             <div>
-              <div className="text-sm font-bold mb-0.5">Paper Mode</div>
-              <div className="text-xs text-muted-foreground">Simulate trades without placing real orders</div>
+              <div className={`text-sm font-bold mb-0.5 ${field("paperMode", true) ? "text-violet-300" : "text-green-300"}`}>Paper Mode</div>
+              <div className="text-xs text-muted-foreground">
+                {field("paperMode", true) ? "Simulating — no real orders placed" : "LIVE — real Gate.io orders firing"}
+              </div>
             </div>
             <button
               onClick={() => set("paperMode", !field("paperMode", true))}
-              className={`relative w-12 h-6 rounded-full border transition-colors ${field("paperMode", true) ? "border-violet-500 bg-violet-500/20" : "border-green-500 bg-green-500/20"}`}
+              className={`flex items-center gap-2 px-4 py-2 text-xs font-mono font-bold border transition-colors ${
+                field("paperMode", true)
+                  ? "border-violet-500 bg-violet-500/20 text-violet-300 hover:bg-violet-500/30"
+                  : "border-green-500 bg-green-500/20 text-green-300 hover:bg-green-500/30"
+              }`}
             >
-              <span className={`absolute top-0.5 w-5 h-5 rounded-full transition-all ${field("paperMode", true) ? "left-0.5 bg-violet-400" : "left-6 bg-green-400"}`} />
+              <span className={`w-2 h-2 rounded-full ${field("paperMode", true) ? "bg-violet-400" : "bg-green-400"}`} />
+              {field("paperMode", true) ? "PAPER" : "LIVE"}
             </button>
           </div>
 
           {/* Long Only */}
-          <div className="flex items-center justify-between p-4 border border-border bg-secondary/30">
+          <div className={`flex items-center justify-between p-4 border transition-colors ${field("longOnly", false) ? "border-blue-500/60 bg-blue-500/10" : "border-border bg-secondary/30"}`}>
             <div>
-              <div className="text-sm font-bold mb-0.5 flex items-center gap-2">
-                <ArrowUpRight className="w-3.5 h-3.5 text-blue-400" />Long Only
+              <div className={`text-sm font-bold mb-0.5 flex items-center gap-2 ${field("longOnly", false) ? "text-blue-300" : "text-foreground"}`}>
+                <ArrowUpRight className="w-3.5 h-3.5" />Long Only
               </div>
-              <div className="text-xs text-muted-foreground">Skip SHORT signals — safer for spot</div>
+              <div className="text-xs text-muted-foreground">
+                {field("longOnly", false) ? "LONG signals only — SHORT signals skipped" : "Both LONG and SHORT signals allowed"}
+              </div>
             </div>
             <button
               onClick={() => set("longOnly", !field("longOnly", false))}
-              className={`relative w-12 h-6 rounded-full border transition-colors ${field("longOnly", false) ? "border-blue-500 bg-blue-500/20" : "border-border bg-secondary"}`}
+              className={`flex items-center gap-2 px-4 py-2 text-xs font-mono font-bold border transition-colors ${
+                field("longOnly", false)
+                  ? "border-blue-500 bg-blue-500/20 text-blue-300 hover:bg-blue-500/30"
+                  : "border-border bg-secondary text-muted-foreground hover:border-blue-500/50 hover:text-blue-300"
+              }`}
             >
-              <span className={`absolute top-0.5 w-5 h-5 rounded-full transition-all ${field("longOnly", false) ? "left-6 bg-blue-400" : "left-0.5 bg-muted-foreground/50"}`} />
+              <span className={`w-2 h-2 rounded-full ${field("longOnly", false) ? "bg-blue-400" : "bg-muted-foreground/40"}`} />
+              {field("longOnly", false) ? "ON" : "OFF"}
             </button>
           </div>
 
@@ -825,16 +963,23 @@ export function ScalperPage() {
           </div>
 
           {/* Compounding */}
-          <div className="flex items-center justify-between p-4 border border-border bg-secondary/30">
+          <div className={`flex items-center justify-between p-4 border transition-colors ${field("compoundingEnabled", false) ? "border-yellow-500/60 bg-yellow-500/10" : "border-border bg-secondary/30"}`}>
             <div>
-              <div className="text-sm font-bold mb-0.5">Compounding</div>
-              <div className="text-xs text-muted-foreground">Reinvest profits — each trade uses the running balance</div>
+              <div className={`text-sm font-bold mb-0.5 ${field("compoundingEnabled", false) ? "text-yellow-300" : "text-foreground"}`}>Compounding</div>
+              <div className="text-xs text-muted-foreground">
+                {field("compoundingEnabled", false) ? "Profits reinvested — balance grows each trade" : "Fixed size — balance not reinvested"}
+              </div>
             </div>
             <button
               onClick={() => set("compoundingEnabled", !field("compoundingEnabled", false))}
-              className={`relative w-12 h-6 rounded-full border transition-colors ${field("compoundingEnabled", false) ? "border-yellow-500 bg-yellow-500/20" : "border-border bg-secondary"}`}
+              className={`flex items-center gap-2 px-4 py-2 text-xs font-mono font-bold border transition-colors ${
+                field("compoundingEnabled", false)
+                  ? "border-yellow-500 bg-yellow-500/20 text-yellow-300 hover:bg-yellow-500/30"
+                  : "border-border bg-secondary text-muted-foreground hover:border-yellow-500/50 hover:text-yellow-300"
+              }`}
             >
-              <span className={`absolute top-0.5 w-5 h-5 rounded-full transition-all ${field("compoundingEnabled", false) ? "left-6 bg-yellow-400" : "left-0.5 bg-muted-foreground/50"}`} />
+              <span className={`w-2 h-2 rounded-full ${field("compoundingEnabled", false) ? "bg-yellow-400" : "bg-muted-foreground/40"}`} />
+              {field("compoundingEnabled", false) ? "ON" : "OFF"}
             </button>
           </div>
 

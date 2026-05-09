@@ -3,7 +3,7 @@ import { db, scalperConfigTable, scalperTradesTable } from "@workspace/db";
 import { eq, desc, count, inArray } from "drizzle-orm";
 import { getUsdtBalance, getLivePrice, placeSpotOrder, cancelPriceTriggeredOrder, getApiKeyDetail } from "../services/gateio";
 import { scalperLastSyncAt } from "../services/scalper-sync";
-import { scalperLoopLastRunAt, scalperLoopLastSignalCount, runScalperScan } from "../services/scalper-loop";
+import { scalperLoopLastRunAt, scalperLoopLastSignalCount, scalperLiveScanResults, scalperLiveScanAt, runScalperScan } from "../services/scalper-loop";
 import { getTopUsdtSymbols, fetchCandles, computeBB, computeRSI, computeVolumeRatio, computeEMA, evaluateSignal } from "../services/scalper-signals";
 import { evaluateSMCSignal } from "../services/scalper-signals-smc";
 
@@ -219,6 +219,12 @@ router.get("/performance", async (req, res): Promise<void> => {
     bestPnl: pnls.length > 0 ? parseFloat(Math.max(...pnls).toFixed(4)) : null,
     worstPnl: pnls.length > 0 ? parseFloat(Math.min(...pnls).toFixed(4)) : null,
   });
+});
+
+// ── Live dual-strategy scan results ──────────────────────────────────────
+
+router.get("/scan/live", (_req, res): void => {
+  res.json({ results: scalperLiveScanResults, scannedAt: scalperLiveScanAt });
 });
 
 // ── Market scan (read-only preview) ──────────────────────────────────────────
