@@ -684,21 +684,26 @@ export function ScalperPage() {
             </button>
           </div>
 
-          {/* Symbol Allowlist */}
+          {/* Trading Allowlist */}
           <div className="space-y-2">
             <label className="text-xs text-muted-foreground tracking-widest flex items-center gap-2">
-              <span className="text-orange-400">▣</span> API SYMBOL ALLOWLIST
+              <span className="text-orange-400">▣</span> API TRADING ALLOWLIST
             </label>
             <textarea
               rows={3}
-              placeholder={"BTC_USDT, ETH_USDT, SOL_USDT\n(leave blank = auto top-5 by volume)"}
+              placeholder={"BTC_USDT, ETH_USDT, SOL_USDT\n(leave blank = trade any scanned pair)"}
               value={(field("symbolAllowlist", null) as string | null) ?? ""}
               onChange={(e) => set("symbolAllowlist", e.target.value.trim() === "" ? null : e.target.value)}
               className="w-full bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-orange-400 resize-none"
             />
-            <p className="text-xs text-muted-foreground">
-              Restrict scanning to these Gate.io pairs — required if your API key has a trading pair allowlist. Comma-separated, e.g. <span className="font-mono text-orange-400/80">BTC_USDT, ETH_USDT</span>
-            </p>
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground">
+                <span className="text-green-400 font-mono">SCAN</span> — always free. Candle data is a public endpoint, your API key is never involved. The bot scans any pair.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                <span className="text-orange-400 font-mono">TRADE</span> — restricted by your Gate.io API key. List only the pairs your key is allowed to trade. Signals on unlisted pairs are detected but skipped at order time. Manual entry always overrides this.
+              </p>
+            </div>
           </div>
         </div>
 

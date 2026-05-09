@@ -92,6 +92,21 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     }
   }
 
+  // ── Trading allowlist guard ──────────────────────────────────────────────
+  // Note: scanning uses public endpoints (no auth), so any coin can be scanned.
+  // This guard only blocks ORDER PLACEMENT for symbols not in the API key allowlist.
+  // Force (manual entry) bypasses this guard intentionally.
+  if (!force && config.symbolAllowlist) {
+    const allowed = config.symbolAllowlist
+      .split(",")
+      .map((s) => s.trim().toUpperCase())
+      .filter(Boolean);
+    if (allowed.length > 0 && !allowed.includes(signal.gateSymbol.toUpperCase())) {
+      logger.info({ symbol: signal.gateSymbol, allowed }, "Scalper: symbol not in trading allowlist, skipping trade");
+      return `${signal.gateSymbol} not in your API trading allowlist — add it or use manual entry to override`;
+    }
+  }
+
   // ── Position sizing ──────────────────────────────────────────────────────
   // Priority: % of live balance > compounding balance > fixed USDT
   let positionSize: number;
