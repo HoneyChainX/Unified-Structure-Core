@@ -35,6 +35,12 @@ export interface ScalperSignal {
   bbMid: number;
   rsi: number;
   volumeRatio: number;
+  /** Pre-computed TP price from strategy geometry (e.g. Fib 4.236). When set, executor uses this instead of config-based computation. */
+  tpPrice?: number;
+  /** Pre-computed SL price from strategy geometry (e.g. below OB low). When set, overrides config slPct. */
+  slPrice?: number;
+  /** Which engine generated this signal */
+  strategy?: string;
 }
 
 // ── Public helpers ──────────────────────────────────────────────────────────

@@ -45,6 +45,9 @@ export const scalperConfigTable = pgTable("scalper_config", {
   // Long/short filter
   longOnly: boolean("long_only").notNull().default(false),
 
+  // Strategy engine: "bb_rsi" (default BB+RSI+volume) or "smc_mss" (MSS+OB+Fib)
+  strategy: text("strategy").notNull().default("bb_rsi"),
+
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

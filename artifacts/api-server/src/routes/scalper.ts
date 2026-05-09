@@ -30,6 +30,7 @@ router.put("/config", async (req, res): Promise<void> => {
     "emaFilterEnabled", "emaPeriod",
     "compoundingEnabled", "compoundBalance",
     "symbolAllowlist",
+    "strategy",
   ];
   const update: Record<string, unknown> = { updatedAt: new Date() };
   for (const key of allowed) {

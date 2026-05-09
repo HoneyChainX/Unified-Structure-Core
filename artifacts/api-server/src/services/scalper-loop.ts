@@ -1,11 +1,12 @@
 /**
  * Scalper scan loop — runs every 5 minutes.
- * Fetches top-5 USDT symbols, scans all for BB+RSI+volume signals,
+ * Selects the active strategy engine from config, scans all allowlisted (or top-5) symbols,
  * and fires executeScalperSignal for any confirmed entry.
  */
 
 import { db, scalperConfigTable } from "@workspace/db";
 import { scanForSignals } from "./scalper-signals";
+import { scanForSMCSignals } from "./scalper-signals-smc";
 import { executeScalperSignal } from "./scalper-executor";
 import { logger } from "../lib/logger";
 
@@ -30,35 +31,56 @@ export async function runScalperScan(): Promise<void> {
     ? allowlistRaw.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean)
     : null;
 
+  const strategy = config.strategy ?? "bb_rsi";
+
   logger.debug(
     allowlistSymbols
-      ? { count: allowlistSymbols.length, symbols: allowlistSymbols }
-      : "no allowlist — using top-5 by volume",
+      ? { count: allowlistSymbols.length, symbols: allowlistSymbols, strategy }
+      : { strategy, note: "no allowlist — using top-5 by volume" },
     "Scalper loop: starting symbol scan"
   );
 
-  const signals = await scanForSignals({
-    bbPeriod: config.bbPeriod,
-    bbStdDev: config.bbStdDev,
-    rsiPeriod: config.rsiPeriod,
-    rsiOversold: config.rsiOversold,
-    rsiOverbought: config.rsiOverbought,
-    volumeSpikeMultiplier: config.volumeSpikeMultiplier,
-    longOnly: config.longOnly,
-    emaFilterEnabled: config.emaFilterEnabled,
-    emaPeriod: config.emaPeriod,
-    symbols: allowlistSymbols ?? undefined,
-  });
+  let signals;
+
+  if (strategy === "smc_mss") {
+    // SMC engine requires a symbol list — fall back to top-5 if no allowlist
+    let symbols = allowlistSymbols;
+    if (!symbols) {
+      const { getTopUsdtSymbols } = await import("./scalper-signals");
+      try {
+        symbols = await getTopUsdtSymbols(5);
+      } catch (err) {
+        logger.error({ err }, "Scalper SMC: failed to fetch top symbols");
+        scalperLoopLastRunAt = new Date();
+        scalperLoopLastSignalCount = 0;
+        return;
+      }
+    }
+    signals = await scanForSMCSignals({ longOnly: config.longOnly, symbols });
+  } else {
+    signals = await scanForSignals({
+      bbPeriod: config.bbPeriod,
+      bbStdDev: config.bbStdDev,
+      rsiPeriod: config.rsiPeriod,
+      rsiOversold: config.rsiOversold,
+      rsiOverbought: config.rsiOverbought,
+      volumeSpikeMultiplier: config.volumeSpikeMultiplier,
+      longOnly: config.longOnly,
+      emaFilterEnabled: config.emaFilterEnabled,
+      emaPeriod: config.emaPeriod,
+      symbols: allowlistSymbols ?? undefined,
+    });
+  }
 
   scalperLoopLastRunAt = new Date();
   scalperLoopLastSignalCount = signals.length;
 
   if (signals.length === 0) {
-    logger.debug("Scalper loop: no signals this cycle");
+    logger.debug({ strategy }, "Scalper loop: no signals this cycle");
     return;
   }
 
-  logger.info({ count: signals.length, symbols: signals.map((s) => s.gateSymbol) }, "Scalper loop: signals found");
+  logger.info({ count: signals.length, symbols: signals.map((s) => s.gateSymbol), strategy }, "Scalper loop: signals found");
 
   for (const signal of signals) {
     await executeScalperSignal(signal).catch((err) => {

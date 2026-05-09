@@ -212,11 +212,26 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     const filledPrice = parseFloat(entryOrder.avg_deal_price || entryOrder.price);
     const filledQty = parseFloat(entryOrder.filled_amount || entryOrder.amount);
 
-    // Recompute TP/SL at actual fill price
-    const actualTpMove = config.targetProfitUsdt / filledQty;
-    const actualTp = signal.side === "buy" ? filledPrice + actualTpMove : filledPrice - actualTpMove;
-    const actualSlMove = filledPrice * (config.slPct / 100);
-    const actualSl = signal.side === "buy" ? filledPrice - actualSlMove : filledPrice + actualSlMove;
+    // Recompute TP/SL at actual fill price.
+    // SMC signals carry absolute Fib/OB levels — use them directly when available.
+    let actualTp: number;
+    if (signal.tpPrice != null) {
+      actualTp = signal.tpPrice;
+    } else if (config.targetProfitPct != null && config.targetProfitPct > 0) {
+      const tpMove = filledPrice * (config.targetProfitPct / 100);
+      actualTp = signal.side === "buy" ? filledPrice + tpMove : filledPrice - tpMove;
+    } else {
+      const tpMove = config.targetProfitUsdt / filledQty;
+      actualTp = signal.side === "buy" ? filledPrice + tpMove : filledPrice - tpMove;
+    }
+
+    let actualSl: number;
+    if (signal.slPrice != null) {
+      actualSl = signal.slPrice;
+    } else {
+      const slMove = filledPrice * (config.slPct / 100);
+      actualSl = signal.side === "buy" ? filledPrice - slMove : filledPrice + slMove;
+    }
 
     await db.update(scalperTradesTable).set({
       entryOrderId: entryOrder.id,
