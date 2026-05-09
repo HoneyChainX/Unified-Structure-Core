@@ -101,13 +101,19 @@ router.get("/status", async (req, res): Promise<void> => {
 // ── Trades ────────────────────────────────────────────────────────────────────
 
 router.get("/trades", async (req, res): Promise<void> => {
-  const limit = Math.min(parseInt((req.query["limit"] as string) || "50"), 200);
+  const limit = Math.min(parseInt((req.query["limit"] as string) || "200"), 500);
   const offset = parseInt((req.query["offset"] as string) || "0");
-  const status = (req.query["status"] as string) || undefined;
+  const statusParam = (req.query["status"] as string) || undefined;
 
   let query = db.select().from(scalperTradesTable).$dynamic();
-  if (status) {
-    query = query.where(eq(scalperTradesTable.status, status)) as typeof query;
+  if (statusParam) {
+    // Support comma-separated statuses: ?status=open,paper
+    const statuses = statusParam.split(",").map((s) => s.trim()).filter(Boolean);
+    if (statuses.length === 1) {
+      query = query.where(eq(scalperTradesTable.status, statuses[0]!)) as typeof query;
+    } else {
+      query = query.where(inArray(scalperTradesTable.status, statuses)) as typeof query;
+    }
   }
 
   const trades = await query.orderBy(desc(scalperTradesTable.createdAt)).limit(limit).offset(offset);
@@ -191,18 +197,24 @@ router.delete("/trades/:id/cancel", async (req, res): Promise<void> => {
 // ── Performance ───────────────────────────────────────────────────────────────
 
 router.get("/performance", async (req, res): Promise<void> => {
-  const closed = await db.select().from(scalperTradesTable).where(eq(scalperTradesTable.status, "closed"));
-  const wins = closed.filter((t) => (t.pnl ?? 0) > 0);
-  const totalPnl = closed.reduce((s, t) => s + (t.pnl ?? 0), 0);
-  const pnls = closed.map((t) => t.pnl ?? 0);
+  // Include manually-cancelled trades — they have real exit P&L
+  const closed = await db.select().from(scalperTradesTable)
+    .where(inArray(scalperTradesTable.status, ["closed", "cancelled"]));
+
+  const withPnl = closed.filter((t) => t.pnl != null);
+  const wins = withPnl.filter((t) => (t.pnl ?? 0) > 0);
+  const losses = withPnl.filter((t) => (t.pnl ?? 0) <= 0);
+  const totalPnl = withPnl.reduce((s, t) => s + (t.pnl ?? 0), 0);
+  const pnls = withPnl.map((t) => t.pnl ?? 0);
 
   res.json({
     totalClosed: closed.length,
+    withPnl: withPnl.length,
     wins: wins.length,
-    losses: closed.length - wins.length,
-    winRate: closed.length > 0 ? (wins.length / closed.length) * 100 : null,
+    losses: losses.length,
+    winRate: withPnl.length > 0 ? (wins.length / withPnl.length) * 100 : null,
     totalPnl: parseFloat(totalPnl.toFixed(4)),
-    avgPnl: closed.length > 0 ? parseFloat((totalPnl / closed.length).toFixed(4)) : null,
+    avgPnl: withPnl.length > 0 ? parseFloat((totalPnl / withPnl.length).toFixed(4)) : null,
     bestPnl: pnls.length > 0 ? parseFloat(Math.max(...pnls).toFixed(4)) : null,
     worstPnl: pnls.length > 0 ? parseFloat(Math.min(...pnls).toFixed(4)) : null,
   });

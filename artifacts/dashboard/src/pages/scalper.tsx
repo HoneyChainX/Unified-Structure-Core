@@ -120,6 +120,7 @@ interface ScalperTrade {
 
 interface ScalperPerformance {
   totalClosed: number;
+  withPnl: number;
   wins: number;
   losses: number;
   winRate: number | null;
@@ -210,7 +211,10 @@ export function ScalperPage() {
 
   const { data: config, refetch: refetchConfig } = useFetch<ScalperConfig>("/api/scalper/config");
   const { data: status, refetch: refetchStatus } = useFetch<ScalperStatus>("/api/scalper/status");
-  const { data: trades, refetch: refetchTrades } = useFetch<ScalperTrade[]>("/api/scalper/trades");
+  // Open positions: poll every 15s for live P&L
+  const { data: openTrades_, refetch: refetchOpen } = useFetch<ScalperTrade[]>("/api/scalper/trades?status=open,paper&limit=100");
+  // Closed history: poll every 60s (static data — only grows)
+  const { data: closedTrades_, refetch: refetchClosed } = useFetch<ScalperTrade[]>("/api/scalper/trades?status=closed,cancelled&limit=200", 60000);
   const { data: perf, refetch: refetchPerf } = useFetch<ScalperPerformance>("/api/scalper/performance");
 
   const cfg = { ...config, ...draft } as ScalperConfig;
@@ -246,7 +250,9 @@ export function ScalperPage() {
 
   async function cancelTrade(id: number) {
     await api(`/api/scalper/trades/${id}/cancel`, { method: "DELETE" });
-    refetchTrades();
+    refetchOpen();
+    refetchClosed();
+    refetchPerf();
   }
 
   async function manualScan() {
@@ -277,7 +283,7 @@ export function ScalperPage() {
       });
       setManualResult(null);
       setManualSymbol("");
-      setTimeout(() => { refetchTrades(); refetchStatus(); }, 1500);
+      setTimeout(() => { refetchOpen(); refetchClosed(); refetchStatus(); }, 1500);
     } catch (e) {
       alert(String(e));
     } finally {
@@ -292,7 +298,7 @@ export function ScalperPage() {
       setScanData(result.symbols);
       setShowScan(true);
       await api("/api/scalper/scan/trigger", { method: "POST" });
-      setTimeout(() => { refetchTrades(); refetchStatus(); }, 3000);
+      setTimeout(() => { refetchOpen(); refetchClosed(); refetchStatus(); }, 3000);
     } catch (e) {
       alert(String(e));
     } finally {
@@ -301,11 +307,11 @@ export function ScalperPage() {
   }
 
   const hasDraft = Object.keys(draft).length > 0;
-  const openTrades = trades?.filter((t) => ["open", "paper"].includes(t.status)) ?? [];
-  const closedTrades = trades?.filter((t) => t.status === "closed") ?? [];
+  const openTrades = openTrades_ ?? [];
+  const closedTrades = closedTrades_ ?? [];
 
-  // Equity curve from closed trades
-  const equityCurve = closedTrades
+  // Equity curve from closed trades (sort ascending by close time)
+  const equityCurve = [...closedTrades]
     .sort((a, b) => new Date(a.closedAt ?? a.createdAt).getTime() - new Date(b.closedAt ?? b.createdAt).getTime())
     .reduce<Array<{ idx: number; cumulative: number; pnl: number }>>((acc, t, i) => {
       const prev = acc[i - 1]?.cumulative ?? 0;
@@ -400,8 +406,8 @@ export function ScalperPage() {
             {[
               { label: "WIN RATE", value: perf.winRate != null ? `${perf.winRate.toFixed(1)}%` : "—", sub: `${perf.wins}W / ${perf.losses}L` },
               { label: "TOTAL P&L", value: `${perf.totalPnl >= 0 ? "+" : ""}${perf.totalPnl.toFixed(4)}`, sub: "USDT", pnl: perf.totalPnl },
-              { label: "BEST TRADE", value: perf.bestPnl != null ? `+${perf.bestPnl.toFixed(4)}` : "—", sub: "USDT", pnl: perf.bestPnl },
-              { label: "WORST TRADE", value: perf.worstPnl != null ? perf.worstPnl.toFixed(4) : "—", sub: "USDT", pnl: perf.worstPnl },
+              { label: "BEST TRADE", value: perf.bestPnl != null ? `${perf.bestPnl >= 0 ? "+" : ""}${perf.bestPnl.toFixed(4)}` : "—", sub: "USDT", pnl: perf.bestPnl },
+              { label: "WORST TRADE", value: perf.worstPnl != null ? `${perf.worstPnl >= 0 ? "+" : ""}${perf.worstPnl.toFixed(4)}` : "—", sub: "USDT", pnl: perf.worstPnl },
             ].map(({ label, value, sub, pnl }) => (
               <div key={label}>
                 <div className="text-xs text-muted-foreground tracking-widest mb-1">{label}</div>
@@ -534,19 +540,21 @@ export function ScalperPage() {
       {closedTrades.length > 0 && (
         <div className="border border-border">
           <div className="flex items-center justify-between p-3 border-b border-border">
-            <span className="text-xs font-bold tracking-widest">TRADE HISTORY ({closedTrades.length})</span>
+            <span className="text-xs font-bold tracking-widest">
+              TRADE HISTORY ({status?.totalTrades != null ? status.totalTrades - openTrades.length : closedTrades.length})
+            </span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs font-mono">
               <thead>
                 <tr className="border-b border-border text-muted-foreground">
-                  {["SYMBOL", "SIDE", "ENTRY", "EXIT", "TP", "P&L", "CLOSE REASON", "TIME"].map((h) => (
+                  {["SYMBOL", "SIDE", "ENTRY", "EXIT", "TP", "P&L", "REASON", "MODE", "TIME"].map((h) => (
                     <th key={h} className="text-left px-3 py-2">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {closedTrades.slice(0, 50).map((t) => (
+                {closedTrades.map((t) => (
                   <tr key={t.id} className="border-b border-border/50 hover:bg-secondary/20">
                     <td className="px-3 py-2 font-bold">{t.symbol}</td>
                     <td className={`px-3 py-2 ${t.side === "buy" ? "text-green-400" : "text-red-400"}`}>
@@ -561,8 +569,11 @@ export function ScalperPage() {
                     <td className={`px-3 py-2 ${t.closeReason === "tp" ? "text-green-400" : t.closeReason === "sl" ? "text-red-400" : "text-muted-foreground"}`}>
                       {t.closeReason?.toUpperCase() ?? "—"}
                     </td>
+                    <td className={`px-3 py-2 text-xs ${t.paperMode ? "text-violet-400" : "text-green-400"}`}>
+                      {t.paperMode ? "PAPER" : "LIVE"}
+                    </td>
                     <td className="px-3 py-2 text-muted-foreground">
-                      {t.closedAt ? new Date(t.closedAt).toLocaleTimeString() : "—"}
+                      {t.closedAt ? new Date(t.closedAt).toLocaleString() : "—"}
                     </td>
                   </tr>
                 ))}
