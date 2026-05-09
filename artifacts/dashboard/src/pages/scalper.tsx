@@ -214,6 +214,16 @@ interface LiveScanEntry {
     obLow: number | null;
     mssLevel: number | null;
   };
+  cht: {
+    detected: boolean;
+    side: "buy" | "sell" | null;
+    score: number | null;
+    grade: string | null;
+    setupType: string | null;
+    taoVotes: number | null;
+    tp: number | null;
+    sl: number | null;
+  };
 }
 
 interface ScanRow {
@@ -672,9 +682,9 @@ export function ScalperPage() {
             )}
           </span>
           <div className="flex items-center gap-3">
-            {liveScan?.results && liveScan.results.some((r) => r.bbRsi.detected || r.smc.detected) && (
+            {liveScan?.results && liveScan.results.some((r) => r.bbRsi.detected || r.smc.detected || r.cht?.detected) && (
               <span className="text-xs font-mono text-yellow-400 font-bold animate-pulse">
-                {liveScan.results.filter((r) => r.bbRsi.detected || r.smc.detected).length} SIGNAL{liveScan.results.filter((r) => r.bbRsi.detected || r.smc.detected).length !== 1 ? "S" : ""} ACTIVE
+                {liveScan.results.filter((r) => r.bbRsi.detected || r.smc.detected || r.cht?.detected).length} SIGNAL{liveScan.results.filter((r) => r.bbRsi.detected || r.smc.detected || r.cht?.detected).length !== 1 ? "S" : ""} ACTIVE
               </span>
             )}
             {!liveScan?.scannedAt && (
@@ -693,6 +703,7 @@ export function ScalperPage() {
                   <th className="text-left px-3 py-2">VOL×</th>
                   <th className="text-left px-3 py-2 text-cyan-400">BB+RSI</th>
                   <th className="text-left px-3 py-2 text-violet-400">SMC MSS+OB</th>
+                  <th className="text-left px-3 py-2 text-amber-400">CHT ENGINE</th>
                   <th className="text-left px-3 py-2 text-yellow-400">ACTION</th>
                 </tr>
               </thead>
@@ -700,18 +711,18 @@ export function ScalperPage() {
                 {liveScan.results
                   .slice()
                   .sort((a, b) => {
-                    const aHit = (a.bbRsi.detected ? 2 : 0) + (a.smc.detected ? 1 : 0);
-                    const bHit = (b.bbRsi.detected ? 2 : 0) + (b.smc.detected ? 1 : 0);
+                    const aHit = (a.bbRsi.detected ? 4 : 0) + (a.smc.detected ? 2 : 0) + (a.cht?.detected ? 3 : 0);
+                    const bHit = (b.bbRsi.detected ? 4 : 0) + (b.smc.detected ? 2 : 0) + (b.cht?.detected ? 3 : 0);
                     return bHit - aHit;
                   })
                   .map((row) => {
-                    const anySignal = row.bbRsi.detected || row.smc.detected;
-                    const bothSignals = row.bbRsi.detected && row.smc.detected;
+                    const anySignal = row.bbRsi.detected || row.smc.detected || row.cht?.detected;
+                    const multiSignal = [row.bbRsi.detected, row.smc.detected, row.cht?.detected].filter(Boolean).length >= 2;
                     return (
                       <tr
                         key={row.gateSymbol}
                         className={`border-b border-border/50 transition-colors ${
-                          bothSignals ? "bg-yellow-500/10 hover:bg-yellow-500/15" :
+                          multiSignal ? "bg-yellow-500/10 hover:bg-yellow-500/15" :
                           anySignal ? "bg-primary/5 hover:bg-primary/10" :
                           "hover:bg-secondary/20"
                         }`}
@@ -722,7 +733,7 @@ export function ScalperPage() {
                             {row.inAllowlist && (
                               <span title="In your trading allowlist" className="text-orange-400 text-xs">▣</span>
                             )}
-                            {bothSignals && <span className="text-yellow-400 text-xs">★</span>}
+                            {multiSignal && <span className="text-yellow-400 text-xs">★</span>}
                           </span>
                         </td>
                         <td className="px-3 py-2.5">{row.lastClose.toPrecision(6)}</td>
@@ -753,6 +764,25 @@ export function ScalperPage() {
                             <span className="text-muted-foreground/50">—</span>
                           )}
                         </td>
+                        <td className="px-3 py-2.5 min-w-[160px]">
+                          {row.cht?.detected ? (() => {
+                            const c = row.cht;
+                            const gradeColor =
+                              c.grade === "ELITE"  ? "text-amber-300 border-amber-500/50 bg-amber-500/15" :
+                              c.grade === "STRONG" ? "text-yellow-300 border-yellow-500/50 bg-yellow-500/15" :
+                              "text-orange-300 border-orange-500/50 bg-orange-500/15";
+                            return (
+                              <span className={`inline-flex items-center gap-1 font-bold px-2 py-0.5 border ${gradeColor}`}>
+                                {c.side === "buy" ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                                {c.side === "buy" ? "LONG" : "SHORT"}
+                                <span className="font-normal ml-1 text-[10px] opacity-80">{c.grade} {c.score}</span>
+                                {c.setupType && <span className="font-normal text-[10px] opacity-60 ml-0.5">{c.setupType[0]}</span>}
+                              </span>
+                            );
+                          })() : (
+                            <span className="text-muted-foreground/50">—</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2.5 min-w-[130px]">
                           {(() => {
                             const msg = liveEnterMsg[row.gateSymbol];
@@ -767,6 +797,7 @@ export function ScalperPage() {
                             const sides: Array<"buy" | "sell"> = [];
                             if (row.bbRsi.detected && row.bbRsi.side) sides.push(row.bbRsi.side as "buy" | "sell");
                             if (row.smc.detected && row.smc.side && !sides.includes(row.smc.side as "buy" | "sell")) sides.push(row.smc.side as "buy" | "sell");
+                            if (row.cht?.detected && row.cht.side && !sides.includes(row.cht.side as "buy" | "sell")) sides.push(row.cht.side as "buy" | "sell");
                             if (sides.length === 0) return <span className="text-muted-foreground/30">—</span>;
                             return (
                               <div className="flex flex-col gap-1">
@@ -956,7 +987,7 @@ export function ScalperPage() {
         {/* Strategy selector */}
         <div className="p-4 border-b border-border space-y-3">
           <label className="text-xs text-muted-foreground tracking-widest">STRATEGY ENGINE</label>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <button
               onClick={() => set("strategy", "bb_rsi")}
               className={`p-3 text-left border transition-colors ${field("strategy", "bb_rsi") === "bb_rsi" ? "border-primary bg-primary/10" : "border-border bg-secondary/30 hover:border-border/80"}`}
@@ -970,6 +1001,13 @@ export function ScalperPage() {
             >
               <div className={`text-sm font-bold mb-1 font-mono ${field("strategy", "bb_rsi") === "smc_mss" ? "text-violet-400" : "text-muted-foreground"}`}>SMC — MSS + OB+ + Fib</div>
               <div className="text-xs text-muted-foreground leading-relaxed">Smart Money. Detects Market Structure Shifts, finds the Order Block, and enters on candle-close confirmation inside the OB. TP = Fib 4.236 extension.</div>
+            </button>
+            <button
+              onClick={() => set("strategy", "cht")}
+              className={`p-3 text-left border transition-colors ${field("strategy", "bb_rsi") === "cht" ? "border-amber-500 bg-amber-500/10" : "border-border bg-secondary/30 hover:border-border/80"}`}
+            >
+              <div className={`text-sm font-bold mb-1 font-mono ${field("strategy", "bb_rsi") === "cht" ? "text-amber-400" : "text-muted-foreground"}`}>CHT Engine</div>
+              <div className="text-xs text-muted-foreground leading-relaxed">Crypto Hybrid Trading Intelligence. Trend + MSS + Trigger + HTF + TAO consensus (6 experts). Graded ELITE/STRONG/MEDIUM. TP = 1.5R.</div>
             </button>
           </div>
         </div>
@@ -1390,6 +1428,53 @@ export function ScalperPage() {
             </div>
           </div>
         )}
+
+        {/* CHT Engine info panel */}
+        {field("strategy", "bb_rsi") === "cht" && (
+          <div className="border-t border-border p-4 space-y-3 bg-amber-500/5">
+            <div className="text-xs font-bold tracking-widest text-amber-400">CHT ENGINE — CRYPTO HYBRID TRADING INTELLIGENCE</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-muted-foreground">
+              <div className="space-y-2">
+                <div className="text-foreground font-bold">11-Stage Analysis Pipeline</div>
+                <div className="space-y-1">
+                  <div><span className="text-amber-400">1. Trend:</span> EMA20/EMA50 alignment · ADX ≥ 18 (ranging = skip)</div>
+                  <div><span className="text-amber-400">2. HTF:</span> 1h EMA20/EMA50 must agree with 5m direction</div>
+                  <div><span className="text-amber-400">3. Volatility:</span> ATR% 0.3–8% scalp regime required</div>
+                  <div><span className="text-amber-400">4. Volume:</span> Ratio ≥ 1.0× · weak volume = skip</div>
+                  <div><span className="text-amber-400">5. Trigger:</span> RETEST &gt; BREAKOUT &gt; REVERSAL (graded 25/18/15)</div>
+                  <div><span className="text-amber-400">6. TAO:</span> 6 expert consensus — needs ≥ 4 votes to emit</div>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <div className="text-foreground font-bold">TAO Consensus Experts</div>
+                <div className="space-y-1">
+                  <div><span className="text-amber-400/70">①</span> Spread Expert — alt outperforming BTC</div>
+                  <div><span className="text-amber-400/70">②</span> Trend Expert — EMA20 {">"}{">"} EMA50</div>
+                  <div><span className="text-amber-400/70">③</span> EMA Expert — price above EMA50</div>
+                  <div><span className="text-amber-400/70">④</span> Volume Expert — ratio ≥ 1.2×</div>
+                  <div><span className="text-amber-400/70">⑤</span> Divergence Expert — RSI divergence</div>
+                  <div><span className="text-amber-400/70">⑥</span> Rotation Expert — RSI {">"}{">"} 50 + HTF aligned</div>
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-4 gap-2 text-xs">
+              {[
+                { grade: "ELITE",  score: "85+",  color: "text-amber-300 border-amber-500/40 bg-amber-500/10" },
+                { grade: "STRONG", score: "75+",  color: "text-yellow-300 border-yellow-500/40 bg-yellow-500/10" },
+                { grade: "MEDIUM", score: "60+",  color: "text-orange-300 border-orange-500/40 bg-orange-500/10" },
+                { grade: "IGNORE", score: "<60", color: "text-muted-foreground border-border bg-secondary/20" },
+              ].map(({ grade, score, color }) => (
+                <div key={grade} className={`border px-2 py-1.5 text-center ${color}`}>
+                  <div className="font-bold">{grade}</div>
+                  <div className="opacity-70">{score} pts</div>
+                </div>
+              ))}
+            </div>
+            <div className="text-xs text-amber-300/60 border border-amber-500/20 bg-amber-500/5 p-2">
+              TP = entry ± 1.5× SL distance (TP2 / 1.5R). SL set from trigger geometry: RETEST = recent low/high − 0.8 ATR · BREAKOUT = swing level ± 1 ATR · REVERSAL = zone edge − 0.8 ATR. Position size and risk rules from config still apply.
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ─── Manual Entry ────────────────────────────────────────────────────── */}
@@ -1431,6 +1516,7 @@ export function ScalperPage() {
             const p = manualResult.lastClose < 1 ? 6 : 4;
             const sig = manualResult.signal;
             const isSMC = manualResult.strategy === "smc_mss";
+            const isCHT = manualResult.strategy === "cht";
 
             return (
               <div className="border border-border bg-secondary/20">
@@ -1438,8 +1524,8 @@ export function ScalperPage() {
                 <div className="flex items-center justify-between px-4 py-3 border-b border-border">
                   <div className="flex items-center gap-3">
                     <div className="font-bold font-mono text-sm">{manualResult.gateSymbol}</div>
-                    <span className="text-[10px] tracking-widest px-1.5 py-0.5 border border-border text-muted-foreground">
-                      {isSMC ? "SMC MSS+OB" : "BB+RSI"}
+                    <span className={`text-[10px] tracking-widest px-1.5 py-0.5 border ${isCHT ? "border-amber-500/50 text-amber-400" : "border-border text-muted-foreground"}`}>
+                      {isSMC ? "SMC MSS+OB" : isCHT ? "CHT ENGINE" : "BB+RSI"}
                     </span>
                   </div>
                   <div className="text-xs text-muted-foreground">
@@ -1490,7 +1576,7 @@ export function ScalperPage() {
                 ) : (
                   <div className="px-4 py-3 border-b border-border bg-secondary/30 flex items-center gap-2">
                     <span className="w-4 h-4 rounded-full border border-muted-foreground/40 inline-flex items-center justify-center text-muted-foreground/40 text-[10px]">○</span>
-                    <span className="text-xs text-muted-foreground tracking-widest">NO SIGNAL — conditions not met for {isSMC ? "SMC MSS+OB+Fib" : "BB+RSI"} strategy</span>
+                    <span className="text-xs text-muted-foreground tracking-widest">NO SIGNAL — conditions not met for {isSMC ? "SMC MSS+OB+Fib" : isCHT ? "CHT Engine" : "BB+RSI"} strategy</span>
                   </div>
                 )}
 

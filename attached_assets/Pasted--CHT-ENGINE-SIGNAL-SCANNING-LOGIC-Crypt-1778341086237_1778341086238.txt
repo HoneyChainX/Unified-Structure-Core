@@ -1,0 +1,523 @@
+========================================================
+CHT ENGINE — SIGNAL SCANNING LOGIC
+(Crypto Hybrid Trading Intelligence)
+========================================================
+
+PURPOSE:
+This module defines HOW the AI scans markets,
+detects opportunities,
+filters noise,
+ranks setups,
+and decides whether a signal is actionable.
+
+========================================================
+1. GLOBAL SCANNING PHILOSOPHY
+========================================================
+
+The scanner must NEVER search for random indicators.
+
+The scanner searches ONLY for:
+
+1. Directional alignment
+2. Structural opportunity
+3. Liquidity participation
+4. Controlled volatility
+5. Positive risk profile
+6. Multi-engine consensus
+
+The scanner works in:
+- multi-symbol mode
+- multi-timeframe mode
+- ranked opportunity mode
+
+========================================================
+2. SCANNING UNIVERSE
+========================================================
+
+SCAN ONLY:
+- High liquidity crypto pairs
+- USDT pairs preferred
+
+MINIMUM CONDITIONS:
+24h Volume > threshold
+Spread acceptable
+No dead markets
+
+PREFERRED:
+BTCUSDT
+ETHUSDT
+SOLUSDT
+BNBUSDT
+LINKUSDT
+AVAXUSDT
+INJUSDT
+RNDRUSDT
+etc.
+
+========================================================
+3. TIMEFRAME SCANNING PRIORITY
+========================================================
+
+SCALP:
+5m
+15m
+
+INTRADAY:
+15m
+1h
+
+SWING:
+1h
+4h
+
+POSITION:
+4h
+1D
+
+========================================================
+4. SIGNAL SCANNING PIPELINE
+========================================================
+
+The AI must evaluate markets in this exact order:
+
+STEP 1 -> Trend Scan
+STEP 2 -> Market Structure Scan
+STEP 3 -> Trigger Detection
+STEP 4 -> Volume Validation
+STEP 5 -> Volatility Validation
+STEP 6 -> Spread Intelligence Scan
+STEP 7 -> Correlation Validation
+STEP 8 -> Risk Validation
+STEP 9 -> TAO Consensus Voting
+STEP 10 -> Opportunity Scoring
+STEP 11 -> Invalidation Check
+STEP 12 -> Final Ranking
+
+========================================================
+5. STEP 1 — TREND SCAN
+========================================================
+
+--------------------------------------------------------
+LONG TREND CONDITIONS
+--------------------------------------------------------
+
+EMA20 > EMA50
+AND
+ADX > 18
+
+--------------------------------------------------------
+SHORT TREND CONDITIONS
+--------------------------------------------------------
+
+EMA20 < EMA50
+AND
+ADX > 18
+
+--------------------------------------------------------
+RANGE FILTER
+--------------------------------------------------------
+
+IF:
+ADX < 18
+
+THEN:
+MARKET = RANGE
+LOW PRIORITY
+OR IGNORE
+
+========================================================
+6. STEP 2 — MARKET STRUCTURE SCAN
+========================================================
+
+PURPOSE:
+Detect:
+- MSS
+- BOS
+- real directional shifts
+
+--------------------------------------------------------
+BULLISH MSS
+--------------------------------------------------------
+
+Price closes above confirmed swing high.
+
+--------------------------------------------------------
+BEARISH MSS
+--------------------------------------------------------
+
+Price closes below confirmed swing low.
+
+--------------------------------------------------------
+BREAKOUT VALIDATION
+--------------------------------------------------------
+
+VALID ONLY IF:
+1. Candle closes beyond level
+2. Body > 40% of candle range
+3. Volume confirms breakout
+
+========================================================
+7. STEP 3 — TRIGGER DETECTION
+========================================================
+
+SUPPORTED SIGNAL TYPES:
+
+1. BREAKOUT
+2. RETEST
+3. REVERSAL
+
+--------------------------------------------------------
+BREAKOUT SIGNAL
+--------------------------------------------------------
+
+LONG:
+Close > Resistance
+AND
+Volume confirmed
+AND
+Trend bullish
+
+SHORT:
+Close < Support
+AND
+Volume confirmed
+AND
+Trend bearish
+
+--------------------------------------------------------
+RETEST SIGNAL (HIGHEST PRIORITY)
+--------------------------------------------------------
+
+FLOW:
+1. Breakout detected
+2. Price revisits level
+3. Rejection candle appears
+4. Confirmation close occurs
+
+--------------------------------------------------------
+REVERSAL SIGNAL
+--------------------------------------------------------
+
+LONG:
+Price enters demand zone
+AND
+RSI crosses above 50
+AND
+Bullish candle appears
+
+SHORT:
+Opposite logic
+
+========================================================
+8. STEP 4 — VOLUME VALIDATION
+========================================================
+
+--------------------------------------------------------
+MINIMUM VALIDATION
+--------------------------------------------------------
+
+volume > SMA(volume,20)
+
+--------------------------------------------------------
+STRONG VALIDATION
+--------------------------------------------------------
+
+volume > SMA(volume,20) * 1.5
+
+--------------------------------------------------------
+VOLUME CLASSIFICATION
+--------------------------------------------------------
+
+EXTREME
+STRONG
+NORMAL
+WEAK
+
+Signals with WEAK volume:
+LOWER SCORE
+OR REJECT
+
+========================================================
+9. STEP 5 — VOLATILITY VALIDATION
+========================================================
+
+atrPct = ATR(14)/close * 100
+
+--------------------------------------------------------
+VALID REGIMES
+--------------------------------------------------------
+
+SCALP:
+0.3% < atrPct < 4%
+
+SWING:
+0.6% < atrPct < 8%
+
+--------------------------------------------------------
+INVALID REGIMES
+--------------------------------------------------------
+
+atrPct too low:
+dead market
+
+atrPct too high:
+chaotic market
+
+========================================================
+10. STEP 6 — SPREAD INTELLIGENCE SCAN
+========================================================
+
+PURPOSE:
+Measure:
+- liquidity rotation
+- altcoin strength
+- stablecoin pressure
+- BTC relative performance
+
+--------------------------------------------------------
+A) ALT ROTATION SPREAD
+--------------------------------------------------------
+
+spread_alt_rot =
+log(total3exbtc / btcCap)
+-
+sma(log(total3exbtc / btcCap), L)
+
+--------------------------------------------------------
+B) RELATIVE STRENGTH VS BTC
+--------------------------------------------------------
+
+spread_x_btc =
+log(close / btcUsd)
+-
+sma(log(close / btcUsd), L)
+
+--------------------------------------------------------
+C) STABLECOIN PRESSURE
+--------------------------------------------------------
+
+spread_stable =
+log((usdtCap + usdcCap)/total3)
+-
+sma(log((usdtCap + usdcCap)/total3), L)
+
+--------------------------------------------------------
+FINAL SPREAD SCORE
+--------------------------------------------------------
+
+SPREAD_SCORE =
+0.4 * spread_alt_rot
++
+0.3 * spread_x_btc
++
+0.3 * spread_stable
+
+--------------------------------------------------------
+SCANNER INTERPRETATION
+--------------------------------------------------------
+
+HIGH POSITIVE:
+Bullish rotation environment
+
+HIGH NEGATIVE:
+Defensive/stablecoin environment
+
+========================================================
+11. STEP 7 — CORRELATION VALIDATION
+========================================================
+
+RULES:
+
+correlation(close, BTC, 20) < 0.9
+
+AND
+
+correlation(volume, roc(close,1),14) > 0.5
+
+--------------------------------------------------------
+PURPOSE
+--------------------------------------------------------
+
+Avoid:
+- random price movement
+- over-correlated weak setups
+
+========================================================
+12. STEP 8 — RISK VALIDATION
+========================================================
+
+--------------------------------------------------------
+STOP LOSS
+--------------------------------------------------------
+
+BREAKOUT:
+SL = breakoutLevel - 1 ATR
+
+RETEST:
+SL = retestLow - 0.8 ATR
+
+REVERSAL:
+SL = zoneLow - 0.8 ATR
+
+--------------------------------------------------------
+TAKE PROFITS
+--------------------------------------------------------
+
+TP1 = 1R
+TP2 = 1.5R
+TP3 = 2R
+
+--------------------------------------------------------
+RISK FILTER
+--------------------------------------------------------
+
+IGNORE IF:
+RR < 1
+
+HIGH PRIORITY:
+RR >= 1.5
+
+========================================================
+13. STEP 9 — TAO CONSENSUS
+========================================================
+
+EXPERT VOTING SYSTEM:
+
+1. Trend Expert
+2. Spread Expert
+3. Volume Expert
+4. EMA Expert
+5. Divergence Expert
+6. Rotation Expert
+
+--------------------------------------------------------
+FINAL RULE
+--------------------------------------------------------
+
+tao_votes >= 5
+
+THEN:
+High confidence setup
+
+========================================================
+14. STEP 10 — OPPORTUNITY SCORING
+========================================================
+
+--------------------------------------------------------
+WEIGHT DISTRIBUTION
+--------------------------------------------------------
+
+Trend Alignment      = 20
+HTF Confirmation     = 20
+Trigger Quality      = 25
+Volume Confirmation  = 10
+Volatility Regime    = 10
+Risk Quality         = 15
+
+TOTAL = 100
+
+--------------------------------------------------------
+CLASSIFICATION
+--------------------------------------------------------
+
+85+ = ELITE
+75-84 = STRONG
+60-74 = MEDIUM
+<60 = IGNORE
+
+========================================================
+15. STEP 11 — INVALIDATION CHECK
+========================================================
+
+INVALID SIGNAL IF:
+
+1. Trend reverses
+2. Opposite MSS appears
+3. Volume collapses
+4. HTF confirmation fails
+5. ATR regime invalidates
+6. Price extends too far before entry
+
+========================================================
+16. STEP 12 — FINAL RANKING
+========================================================
+
+RANK SIGNALS BY:
+
+1. Highest score
+2. Highest TAO votes
+3. Best RR
+4. Strongest spread score
+5. Strongest HTF alignment
+6. Strongest volume expansion
+
+--------------------------------------------------------
+HIGHEST PRIORITY SIGNALS
+--------------------------------------------------------
+
+1. Retest setups
+2. HTF aligned trades
+3. Strong spread score
+4. RR >= 1.5
+5. Strong breakout volume
+
+========================================================
+17. SIGNAL GENERATION RULE
+========================================================
+
+GENERATE ALERT ONLY IF:
+
+Trend_OK
+AND Structure_OK
+AND Trigger_OK
+AND Volume_OK
+AND ATR_OK
+AND Risk_OK
+AND Spread_OK
+AND HTF_OK
+AND TAO_OK
+AND No_Invalidation
+
+========================================================
+18. SIGNAL OUTPUT FORMAT
+========================================================
+
+{
+  "symbol": "",
+  "timeframe": "",
+  "side": "LONG/SHORT",
+  "setup_type": "BREAKOUT/RETEST/REVERSAL",
+  "trend_state": "",
+  "market_state": "",
+  "score": 0,
+  "tao_votes": 0,
+  "spread_score": 0,
+  "entry": 0,
+  "sl": 0,
+  "tp1": 0,
+  "tp2": 0,
+  "tp3": 0,
+  "rr": 0,
+  "volume_state": "",
+  "atr_state": "",
+  "confidence": "",
+  "reason": ""
+}
+
+========================================================
+19. MASTER SCANNING RULE
+========================================================
+
+DO NOT SCAN FOR MOVEMENT.
+
+SCAN FOR:
+- alignment
+- structure
+- confirmation
+- liquidity
+- risk quality
+- context agreement
+
+ONLY THEN:
+Generate signal.
+========================================================

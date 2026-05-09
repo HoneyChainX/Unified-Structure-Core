@@ -8,6 +8,7 @@
 import { db, scalperConfigTable } from "@workspace/db";
 import { scanForSignals, fetchCandles, evaluateSignal, getTopUsdtSymbols } from "./scalper-signals";
 import { scanForSMCSignals, evaluateSMCSignal } from "./scalper-signals-smc";
+import { scanForCHTSignals, evaluateCHTSignal } from "./scalper-signals-cht";
 import { executeScalperSignal } from "./scalper-executor";
 import { logger } from "../lib/logger";
 
@@ -40,6 +41,16 @@ export interface LiveScanEntry {
     obLow: number | null;
     mssLevel: number | null;
   };
+  cht: {
+    detected: boolean;
+    side: "buy" | "sell" | null;
+    score: number | null;
+    grade: string | null;
+    setupType: string | null;
+    taoVotes: number | null;
+    tp: number | null;
+    sl: number | null;
+  };
 }
 
 export let scalperLiveScanResults: LiveScanEntry[] = [];
@@ -63,7 +74,6 @@ async function runLiveDualScan(): Promise<void> {
     topSymbols = await getTopUsdtSymbols(scanPoolSize);
   } catch (err) {
     logger.error({ err }, "Live dual scan: failed to fetch top symbols");
-    // Fall back to allowlist only if top-symbols fetch fails
     topSymbols = [];
   }
 
@@ -88,17 +98,32 @@ async function runLiveDualScan(): Promise<void> {
     emaPeriod: config?.emaPeriod ?? 200,
   };
 
+  // Fetch BTC 5m candles once for CHT spread intelligence (reused across all symbols)
+  let btcCandles: Awaited<ReturnType<typeof fetchCandles>> = [];
+  try {
+    btcCandles = await fetchCandles("BTC_USDT", "5m", 150);
+  } catch (err) {
+    logger.warn({ err }, "Live dual scan: failed to fetch BTC candles for CHT spread");
+  }
+
   const results: LiveScanEntry[] = [];
 
   for (const sym of symbols) {
     try {
-      const candles = await fetchCandles(sym, "5m", 100);
+      // Fetch 5m (BB+RSI/SMC/CHT) and 1h (CHT HTF) concurrently
+      const [candles, htfCandles] = await Promise.all([
+        fetchCandles(sym, "5m", 150),
+        fetchCandles(sym, "1h", 60).catch(() => [] as Awaited<ReturnType<typeof fetchCandles>>),
+      ]);
       if (candles.length < 20) continue;
 
       const lastClose = candles[candles.length - 1]!.close;
 
-      const bbSignal = evaluateSignal(sym, candles, bbParams);
+      const bbSignal  = evaluateSignal(sym, candles, bbParams);
       const smcSignal = evaluateSMCSignal(sym, candles, { longOnly });
+      const chtSignal = htfCandles.length >= 55
+        ? evaluateCHTSignal(sym, candles, htfCandles, btcCandles, { longOnly })
+        : null;
 
       results.push({
         gateSymbol: sym,
@@ -117,10 +142,19 @@ async function runLiveDualScan(): Promise<void> {
           side: smcSignal ? smcSignal.side : null,
           tp: smcSignal?.tpPrice ?? null,
           sl: smcSignal?.slPrice ?? null,
-          // SMC repurposes BB fields: bbUpper=OB high, bbLower=OB low, bbMid=MSS
           obHigh: smcSignal ? smcSignal.bbUpper : null,
           obLow: smcSignal ? smcSignal.bbLower : null,
           mssLevel: smcSignal ? smcSignal.bbMid : null,
+        },
+        cht: {
+          detected: chtSignal !== null,
+          side: chtSignal ? chtSignal.side : null,
+          score: chtSignal?.chtScore ?? null,
+          grade: chtSignal?.chtGrade ?? null,
+          setupType: chtSignal?.chtSetupType ?? null,
+          taoVotes: chtSignal?.chtTaoVotes ?? null,
+          tp: chtSignal?.tpPrice ?? null,
+          sl: chtSignal?.slPrice ?? null,
         },
       });
     } catch (err) {
@@ -131,8 +165,13 @@ async function runLiveDualScan(): Promise<void> {
   scalperLiveScanResults = results;
   scalperLiveScanAt = new Date();
   logger.debug(
-    { symbols: results.length, bbHits: results.filter((r) => r.bbRsi.detected).length, smcHits: results.filter((r) => r.smc.detected).length },
-    "Live dual scan complete"
+    {
+      symbols: results.length,
+      bbHits: results.filter((r) => r.bbRsi.detected).length,
+      smcHits: results.filter((r) => r.smc.detected).length,
+      chtHits: results.filter((r) => r.cht.detected).length,
+    },
+    "Live dual scan complete",
   );
 }
 
@@ -179,6 +218,8 @@ export async function runScalperScan(): Promise<void> {
 
   if (strategy === "smc_mss") {
     signals = await scanForSMCSignals({ longOnly: config.longOnly, symbols: resolvedSymbols! });
+  } else if (strategy === "cht") {
+    signals = await scanForCHTSignals({ longOnly: config.longOnly, symbols: resolvedSymbols! });
   } else {
     signals = await scanForSignals({
       bbPeriod: config.bbPeriod,

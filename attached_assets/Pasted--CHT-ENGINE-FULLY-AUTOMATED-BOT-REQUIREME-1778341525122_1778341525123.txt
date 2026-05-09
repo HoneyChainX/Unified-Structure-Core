@@ -1,0 +1,795 @@
+========================================================
+CHT ENGINE — FULLY AUTOMATED BOT REQUIREMENTS
+(AI Autonomous Trading Architecture)
+========================================================
+
+PURPOSE:
+This specification defines the FULL requirements needed for the CHT Engine
+to operate as a completely autonomous AI trading bot system.
+
+IMPORTANT:
+- TAO voting system REMOVED
+- No manual confirmation required
+- Entire decision pipeline handled automatically by the bot
+- The bot itself becomes the final intelligence layer
+
+========================================================
+1. CORE BOT OBJECTIVE
+========================================================
+
+The bot must autonomously:
+
+1. Scan markets
+2. Detect opportunities
+3. Validate setups
+4. Rank trades
+5. Calculate risk
+6. Generate entries
+7. Manage positions
+8. Handle exits
+9. Track performance
+10. Adapt to market conditions
+
+WITHOUT human intervention.
+
+========================================================
+2. REQUIRED SYSTEM ARCHITECTURE
+========================================================
+
+The bot requires 7 main layers:
+
+--------------------------------------------------------
+1. Market Data Layer
+--------------------------------------------------------
+
+Purpose:
+Collect real-time market data.
+
+Required:
+- OHLCV candles
+- volume
+- BTC data
+- market cap data
+- stablecoin metrics
+- orderbook (optional)
+
+--------------------------------------------------------
+2. Technical Intelligence Layer
+--------------------------------------------------------
+
+Purpose:
+Calculate:
+- trend
+- volatility
+- structure
+- spread intelligence
+- correlations
+- momentum
+
+--------------------------------------------------------
+3. Opportunity Detection Layer
+--------------------------------------------------------
+
+Purpose:
+Detect:
+- breakout setups
+- retests
+- reversals
+- continuation structures
+
+--------------------------------------------------------
+4. Risk Management Layer
+--------------------------------------------------------
+
+Purpose:
+Handle:
+- SL
+- TP
+- RR validation
+- sizing
+- drawdown protection
+
+--------------------------------------------------------
+5. Trade Execution Layer
+--------------------------------------------------------
+
+Purpose:
+- place orders
+- modify orders
+- close positions
+- partial exits
+- trailing logic
+
+--------------------------------------------------------
+6. Position Management Layer
+--------------------------------------------------------
+
+Purpose:
+- monitor open trades
+- move SL
+- detect invalidation
+- close failing setups
+
+--------------------------------------------------------
+7. Analytics & Learning Layer
+--------------------------------------------------------
+
+Purpose:
+- store results
+- analyze performance
+- improve scoring
+- detect market regimes
+
+========================================================
+3. REQUIRED DATA SOURCES
+========================================================
+
+--------------------------------------------------------
+PRIMARY EXCHANGE APIs
+--------------------------------------------------------
+
+Recommended:
+- Gate
+
+Required:
+- candles
+- tickers
+- volume
+- market metadata
+
+--------------------------------------------------------
+MARKET CONTEXT SOURCES
+--------------------------------------------------------
+
+Required:
+BTC dominance
+TOTAL3
+USDT market cap
+USDC market cap
+
+Recommended sources:
+- TradingView symbols
+- CoinGecko API
+- CoinMarketCap API
+
+========================================================
+4. REQUIRED BOT CAPABILITIES
+========================================================
+
+The bot MUST support:
+
+--------------------------------------------------------
+A) MULTI-SYMBOL SCANNING
+--------------------------------------------------------
+
+Example:
+100-500 symbols simultaneously.
+
+--------------------------------------------------------
+B) MULTI-TIMEFRAME ANALYSIS
+--------------------------------------------------------
+
+Required:
+5m
+15m
+1h
+4h
+
+--------------------------------------------------------
+C) STATE MEMORY
+--------------------------------------------------------
+
+Bot must remember:
+- active setups
+- recent invalidations
+- current regime
+- recent breakouts
+- open positions
+- duplicate signals
+
+--------------------------------------------------------
+D) REAL-TIME PROCESSING
+--------------------------------------------------------
+
+Bot should:
+- scan every candle close
+- update rankings dynamically
+- monitor open trades continuously
+
+========================================================
+5. TREND ENGINE REQUIREMENTS
+========================================================
+
+Required indicators:
+
+EMA20
+EMA50
+ADX14
+
+--------------------------------------------------------
+LONG TREND
+--------------------------------------------------------
+
+EMA20 > EMA50
+AND
+ADX > 18
+
+--------------------------------------------------------
+SHORT TREND
+--------------------------------------------------------
+
+EMA20 < EMA50
+AND
+ADX > 18
+
+--------------------------------------------------------
+RANGE FILTER
+--------------------------------------------------------
+
+IF ADX < 18:
+avoid trades
+or lower confidence.
+
+========================================================
+6. MARKET STRUCTURE ENGINE
+========================================================
+
+Required:
+- swing high detection
+- swing low detection
+- MSS logic
+- BOS logic
+- breakout validation
+
+--------------------------------------------------------
+BULLISH MSS
+--------------------------------------------------------
+
+Price closes above confirmed swing high.
+
+--------------------------------------------------------
+BEARISH MSS
+--------------------------------------------------------
+
+Price closes below confirmed swing low.
+
+--------------------------------------------------------
+VALID BREAKOUT RULES
+--------------------------------------------------------
+
+1. Close beyond level
+2. Body > 40% of candle range
+3. Volume confirmed
+
+========================================================
+7. TRIGGER ENGINE REQUIREMENTS
+========================================================
+
+Supported setups:
+
+--------------------------------------------------------
+A) BREAKOUT
+--------------------------------------------------------
+
+LONG:
+Close > resistance
+AND volume expansion
+AND bullish trend
+
+SHORT:
+Close < support
+AND bearish trend
+
+--------------------------------------------------------
+B) RETEST (HIGH PRIORITY)
+--------------------------------------------------------
+
+Flow:
+1. breakout detected
+2. pullback to level
+3. rejection candle
+4. confirmation close
+
+--------------------------------------------------------
+C) REVERSAL
+--------------------------------------------------------
+
+LONG:
+Demand zone
++
+RSI > 50 reclaim
++
+bullish candle
+
+SHORT:
+opposite logic
+
+========================================================
+8. VOLUME ENGINE REQUIREMENTS
+========================================================
+
+Required:
+- current volume
+- SMA(volume,20)
+
+--------------------------------------------------------
+MINIMUM CONFIRMATION
+--------------------------------------------------------
+
+volume > average volume
+
+--------------------------------------------------------
+STRONG BREAKOUT
+--------------------------------------------------------
+
+volume > average * 1.5
+
+========================================================
+9. VOLATILITY ENGINE REQUIREMENTS
+========================================================
+
+Required:
+ATR14
+
+--------------------------------------------------------
+VALID REGIMES
+--------------------------------------------------------
+
+SCALP:
+0.3% < ATR% < 4%
+
+SWING:
+0.6% < ATR% < 8%
+
+--------------------------------------------------------
+INVALID REGIMES
+--------------------------------------------------------
+
+low ATR:
+dead market
+
+extreme ATR:
+chaotic market
+
+========================================================
+10. SPREAD INTELLIGENCE ENGINE
+========================================================
+
+PURPOSE:
+Measure:
+- liquidity rotation
+- altcoin strength
+- stablecoin pressure
+- BTC relative strength
+
+--------------------------------------------------------
+A) ALT ROTATION
+--------------------------------------------------------
+
+spread_alt_rot =
+log(total3exbtc / btcCap)
+-
+sma(log(total3exbtc / btcCap), L)
+
+--------------------------------------------------------
+B) RELATIVE STRENGTH VS BTC
+--------------------------------------------------------
+
+spread_x_btc =
+log(close / btcUsd)
+-
+sma(log(close / btcUsd), L)
+
+--------------------------------------------------------
+C) STABLECOIN PRESSURE
+--------------------------------------------------------
+
+spread_stable =
+log((usdtCap + usdcCap)/total3)
+-
+sma(log((usdtCap + usdcCap)/total3), L)
+
+--------------------------------------------------------
+FINAL SPREAD SCORE
+--------------------------------------------------------
+
+SPREAD_SCORE =
+0.4 * spread_alt_rot
++
+0.3 * spread_x_btc
++
+0.3 * spread_stable
+
+--------------------------------------------------------
+BOT INTERPRETATION
+--------------------------------------------------------
+
+Positive spread:
+risk-on environment
+
+Negative spread:
+defensive environment
+
+========================================================
+11. CORRELATION ENGINE
+========================================================
+
+Required:
+BTC correlation
+volume-price correlation
+
+--------------------------------------------------------
+RULES
+--------------------------------------------------------
+
+correlation(close, BTC, 20) < 0.9
+
+AND
+
+correlation(volume, roc(close,1),14) > 0.5
+
+========================================================
+12. RISK ENGINE REQUIREMENTS
+========================================================
+
+--------------------------------------------------------
+STOP LOSS
+--------------------------------------------------------
+
+BREAKOUT:
+SL = breakoutLevel - 1 ATR
+
+RETEST:
+SL = retestLow - 0.8 ATR
+
+REVERSAL:
+SL = zoneLow - 0.8 ATR
+
+--------------------------------------------------------
+TAKE PROFITS
+--------------------------------------------------------
+
+TP1 = 1R
+TP2 = 1.5R
+TP3 = 2R
+
+--------------------------------------------------------
+MINIMUM RISK QUALITY
+--------------------------------------------------------
+
+IGNORE:
+RR < 1
+
+PRIORITIZE:
+RR >= 1.5
+
+========================================================
+13. POSITION SIZING ENGINE
+========================================================
+
+The bot must support:
+
+--------------------------------------------------------
+A) FIXED RISK MODEL
+--------------------------------------------------------
+
+Example:
+1% account risk per trade.
+
+--------------------------------------------------------
+B) KELLY ADAPTIVE MODEL
+--------------------------------------------------------
+
+Dynamic sizing based on:
+- winrate
+- expectancy
+- drawdown
+
+--------------------------------------------------------
+C) MAX EXPOSURE LIMITS
+--------------------------------------------------------
+
+Example:
+- max 3 open positions
+- max 5% total account exposure
+
+========================================================
+14. EXECUTION ENGINE REQUIREMENTS
+========================================================
+
+Bot must support:
+
+--------------------------------------------------------
+A) MARKET ORDERS
+--------------------------------------------------------
+
+Fast execution.
+
+--------------------------------------------------------
+B) LIMIT ORDERS
+--------------------------------------------------------
+
+Preferred for retests.
+
+--------------------------------------------------------
+C) PARTIAL TAKE PROFITS
+--------------------------------------------------------
+
+Example:
+TP1 -> close 30%
+TP2 -> close 30%
+TP3 -> close remainder
+
+--------------------------------------------------------
+D) TRAILING STOP
+--------------------------------------------------------
+
+Optional ATR trailing.
+
+========================================================
+15. POSITION MANAGEMENT ENGINE
+========================================================
+
+Bot must:
+
+--------------------------------------------------------
+A) MONITOR INVALIDATION
+--------------------------------------------------------
+
+Close trade if:
+- trend reverses
+- opposite MSS appears
+- volatility regime fails
+
+--------------------------------------------------------
+B) BREAK-EVEN LOGIC
+--------------------------------------------------------
+
+Move SL to BE after TP1.
+
+--------------------------------------------------------
+C) TRADE TIMEOUT
+--------------------------------------------------------
+
+Close stale trades automatically.
+
+========================================================
+16. SIGNAL SCORING ENGINE
+========================================================
+
+--------------------------------------------------------
+FINAL SCORE WEIGHTS
+--------------------------------------------------------
+
+Trend Alignment      = 20
+HTF Confirmation     = 20
+Trigger Quality      = 25
+Volume Confirmation  = 10
+Volatility Regime    = 10
+Risk Quality         = 15
+
+TOTAL = 100
+
+--------------------------------------------------------
+SIGNAL CLASSIFICATION
+--------------------------------------------------------
+
+85+ = ELITE
+75-84 = STRONG
+60-74 = MEDIUM
+<60 = IGNORE
+
+========================================================
+17. FINAL SIGNAL GENERATION RULE
+========================================================
+
+BOT MAY EXECUTE TRADE ONLY IF:
+
+Trend_OK
+AND Structure_OK
+AND Trigger_OK
+AND Volume_OK
+AND ATR_OK
+AND Risk_OK
+AND Spread_OK
+AND HTF_OK
+AND No_Invalidation
+
+========================================================
+18. REQUIRED DATABASE STRUCTURE
+========================================================
+
+Required tables:
+
+--------------------------------------------------------
+raw_market_data
+--------------------------------------------------------
+
+candles
+volume
+BTC metrics
+spread metrics
+
+--------------------------------------------------------
+signals
+--------------------------------------------------------
+
+detected opportunities
+
+--------------------------------------------------------
+executed_trades
+--------------------------------------------------------
+
+entry
+exit
+PnL
+duration
+
+--------------------------------------------------------
+market_regimes
+--------------------------------------------------------
+
+trend/range/risk states
+
+--------------------------------------------------------
+analytics
+--------------------------------------------------------
+
+performance statistics
+
+========================================================
+19. REQUIRED AUTOMATION TOOLS
+========================================================
+
+--------------------------------------------------------
+A) SCANNING ENGINE
+--------------------------------------------------------
+
+Recommended:
+Python async scanner
+
+Libraries:
+- ccxt
+- pandas
+- numpy
+
+--------------------------------------------------------
+B) AI LAYER
+--------------------------------------------------------
+
+Recommended:
+- OpenAI API
+- Claude API
+- local LLM
+
+Purpose:
+ranking/reasoning/adaptation.
+
+--------------------------------------------------------
+C) AUTOMATION ENGINE
+--------------------------------------------------------
+
+Recommended:
+n8n
+
+Purpose:
+alerts
+logging
+notifications
+reports
+
+--------------------------------------------------------
+D) DATABASE
+--------------------------------------------------------
+
+Recommended:
+PostgreSQL
+Redis
+Supabase
+
+========================================================
+20. REQUIRED PERFORMANCE TARGETS
+========================================================
+
+Signal detection:
+< 1 candle delay
+
+Scanner latency:
+< 1 sec
+
+Execution latency:
+< 500ms preferred
+
+Bot uptime:
+24/7
+
+========================================================
+21. REQUIRED SAFETY RULES
+========================================================
+
+NEVER:
+- trade without SL
+- use repaint data
+- use future pivots
+- open duplicate trades
+- exceed exposure limits
+- trade dead markets
+
+========================================================
+22. RECOMMENDED AI ENHANCEMENTS
+========================================================
+
+OPTIONAL ADVANCED FEATURES:
+
+--------------------------------------------------------
+A) REGIME DETECTION AI
+--------------------------------------------------------
+
+Detect:
+- trend
+- chop
+- panic
+- expansion
+
+--------------------------------------------------------
+B) ADAPTIVE SCORING
+--------------------------------------------------------
+
+Dynamically modify score weights
+based on market conditions.
+
+--------------------------------------------------------
+C) SELF-LEARNING ANALYTICS
+--------------------------------------------------------
+
+Analyze:
+- best setups
+- best symbols
+- best volatility regimes
+
+========================================================
+23. FINAL FULLY AUTOMATED FLOW
+========================================================
+
+1. Collect market data
+2. Calculate indicators
+3. Detect trend
+4. Detect structure
+5. Detect trigger
+6. Validate volume
+7. Validate volatility
+8. Calculate spread intelligence
+9. Validate correlations
+10. Calculate risk
+11. Score opportunity
+12. Validate no invalidation
+13. Rank signals
+14. Execute trade
+15. Manage position
+16. Monitor exits
+17. Store analytics
+18. Learn/adapt
+
+========================================================
+24. FINAL MASTER RULE
+========================================================
+
+THE BOT MUST NEVER TRADE
+BASED ON A SINGLE SIGNAL.
+
+THE BOT TRADES ONLY WHEN:
+trend
++
+structure
++
+liquidity
++
+volatility
++
+risk
++
+context
+
+ALL ALIGN TOGETHER.
+
+========================================================

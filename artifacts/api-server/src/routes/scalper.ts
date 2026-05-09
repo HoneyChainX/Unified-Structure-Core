@@ -493,7 +493,7 @@ router.post("/webhook", async (req, res): Promise<void> => {
     const signal = {
       symbol,
       gateSymbol,
-      side,
+      side: side as "buy" | "sell",
       entryPrice: lastClose,
       bbUpper: bb.upper,
       bbLower: bb.lower,

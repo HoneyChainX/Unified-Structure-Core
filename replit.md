@@ -100,6 +100,34 @@ Required secrets for live trading: `GATEIO_API_KEY`, `GATEIO_API_SECRET`
 - `artifacts/dashboard/src/pages/backtest.tsx` — Backtest replay page
 - `artifacts/api-server/src/routes/bot.ts` — `/bot/analytics` GET, `/bot/backtest` POST endpoints
 
+## CHT Engine (Crypto Hybrid Trading Intelligence)
+
+Third strategy mode (`strategy = "cht"`) implemented alongside BB+RSI and SMC MSS.
+
+**11-Stage pipeline:**
+1. Trend Engine — EMA20/EMA50 alignment + ADX ≥ 18 (ranging = skip)
+2. HTF Confirmation — 1h EMA20/EMA50 must agree with 5m direction
+3. Volatility Engine — ATR% 0.3–8% scalp regime required
+4. Volume Engine — volumeRatio ≥ 1.0×, weak volume = skip
+5. RSI — computed for trigger and divergence
+6. Market Structure — 3-bar swing high/low detection
+7. Trigger Engine — RETEST (25pts) > BREAKOUT (18pts) > REVERSAL (15pts)
+8. Risk Engine — TP = entry ± 1.5× SL distance (TP2 / 1.5R)
+9. Spread Intelligence — relative return vs BTC (alt-rotation proxy)
+10. Divergence Engine — RSI divergence (confidence boost)
+11. TAO Consensus — 6 expert votes; ≥ 4 required (Spread/Trend/EMA/Volume/Divergence/Rotation)
+
+**Opportunity Score** (0–100): Trend=20, HTF=20, Trigger=25, Volume=10, Volatility=10, Risk=15
+**Grades:** ELITE (85+), STRONG (75+), MEDIUM (60+), IGNORE (<60 — not emitted)
+
+**Live Scan Monitor** shows CHT column with grade + score inline alongside BB+RSI and SMC columns.
+**Multi-signal rows** (≥ 2 strategies detecting) are highlighted with ★.
+
+## Where things live (extended v3)
+
+- `artifacts/api-server/src/services/scalper-signals-cht.ts` — CHT Engine (full implementation)
+- `artifacts/api-server/src/services/scalper-signals.ts` — `ScalperSignal` interface now includes optional `chtScore`, `chtGrade`, `chtSetupType`, `chtTaoVotes` fields
+
 ## User preferences
 
 _Populate as you build — explicit user instructions worth remembering across sessions._
