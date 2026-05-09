@@ -200,7 +200,11 @@ export function evaluateSignal(
   const symbol = gateSymbol.replace("_", "");
 
   // LONG: price at/below lower BB AND RSI oversold — volume is informational only
-  const trendAllowsLong = !params.emaFilterEnabled || ema === null || lastClose > ema;
+  // EMA filter uses a 2% tolerance zone below EMA rather than strict price > EMA.
+  // BB+RSI is a mean-reversion strategy — an oversold pullback will always temporarily
+  // dip below EMA50. Requiring price > EMA blocks every valid setup. Instead, block
+  // only when price is MORE THAN 2% below EMA (genuine downtrend), not a normal dip.
+  const trendAllowsLong = !params.emaFilterEnabled || ema === null || lastClose > ema * 0.98;
   if (lastClose <= bb.lower && rsi <= params.rsiOversold && trendAllowsLong) {
     return {
       symbol,
