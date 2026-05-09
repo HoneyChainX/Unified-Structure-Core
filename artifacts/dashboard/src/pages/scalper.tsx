@@ -1071,7 +1071,7 @@ export function ScalperPage() {
                   )}
                   {tpMode === "auto" && (
                     <p className="text-xs text-violet-300/80 border border-violet-500/30 bg-violet-500/10 px-3 py-2">
-                      Bot targets the opposite Bollinger Band — upper band for longs, lower band for shorts. TP adapts to current market volatility automatically.
+                      Bot targets the opposite Bollinger Band — upper band for longs, lower band for shorts. Applies to both BB+RSI and SMC strategies, overriding Fibonacci targets. TP adapts to current market volatility automatically.
                     </p>
                   )}
                 </>

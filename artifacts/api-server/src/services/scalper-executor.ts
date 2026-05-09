@@ -132,13 +132,13 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
   /** Compute TP/SL from a given fill price, honouring signal geometry (SMC) first, then config. */
   function computeTpSl(fillPrice: number, fillQty: number): { tp: number; sl: number } {
     let tp: number;
-    if (signal.tpPrice != null) {
+    if (config.dynamicTp) {
+      // AUTO BB — user explicitly chose this mode; overrides all signal geometry
+      // LONG → target upper band; SHORT → target lower band. Works for both BB+RSI and SMC.
+      tp = signal.side === "buy" ? signal.bbUpper : signal.bbLower;
+    } else if (signal.tpPrice != null) {
       // SMC: absolute Fib level — does not depend on fill price
       tp = signal.tpPrice;
-    } else if (config.dynamicTp) {
-      // Dynamic: target the opposite Bollinger Band (mean-reversion to the far band)
-      // LONG entered at/near lower band → target upper band; SHORT → target lower band
-      tp = signal.side === "buy" ? signal.bbUpper : signal.bbLower;
     } else if (config.targetProfitPct != null && config.targetProfitPct > 0) {
       const move = fillPrice * (config.targetProfitPct / 100);
       tp = signal.side === "buy" ? fillPrice + move : fillPrice - move;
@@ -238,10 +238,13 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     const filledPrice = parseFloat(entryOrder.avg_deal_price || entryOrder.price);
     const filledQty = parseFloat(entryOrder.filled_amount || entryOrder.amount);
 
-    // Recompute TP/SL at actual fill price.
-    // SMC signals carry absolute Fib/OB levels — use them directly when available.
+    // Recompute TP/SL at actual fill price — same priority order as computeTpSl.
     let actualTp: number;
-    if (signal.tpPrice != null) {
+    if (config.dynamicTp) {
+      // AUTO BB overrides all signal geometry for both BB+RSI and SMC strategies
+      actualTp = signal.side === "buy" ? signal.bbUpper : signal.bbLower;
+    } else if (signal.tpPrice != null) {
+      // SMC: absolute Fib level
       actualTp = signal.tpPrice;
     } else if (config.targetProfitPct != null && config.targetProfitPct > 0) {
       const tpMove = filledPrice * (config.targetProfitPct / 100);
