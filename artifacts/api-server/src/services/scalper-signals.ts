@@ -202,7 +202,7 @@ export async function scanForSignals(params: SignalParams): Promise<ScalperSigna
 
   const results = await Promise.allSettled(
     symbols.map(async (gateSymbol) => {
-      const candles = await fetchCandles(gateSymbol, 300, CANDLE_LIMIT);
+      const candles = await fetchCandles(gateSymbol, "5m", CANDLE_LIMIT);
       return evaluateSignal(gateSymbol, candles, params);
     })
   );
