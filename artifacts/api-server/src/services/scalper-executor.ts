@@ -127,27 +127,42 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
   const entryPrice = signal.entryPrice;
   const quantity = positionSize / entryPrice;
 
-  // TP: % of entry takes priority over fixed USDT target
-  let tpPrice: number;
-  if (config.targetProfitPct != null && config.targetProfitPct > 0) {
-    const tpMove = entryPrice * (config.targetProfitPct / 100);
-    tpPrice = signal.side === "buy" ? entryPrice + tpMove : entryPrice - tpMove;
-  } else {
-    const tpMove = config.targetProfitUsdt / quantity;
-    tpPrice = signal.side === "buy" ? entryPrice + tpMove : entryPrice - tpMove;
+  /** Compute TP/SL from a given fill price, honouring signal geometry (SMC) first, then config. */
+  function computeTpSl(fillPrice: number, fillQty: number): { tp: number; sl: number } {
+    let tp: number;
+    if (signal.tpPrice != null) {
+      // SMC: absolute Fib level — does not depend on fill price
+      tp = signal.tpPrice;
+    } else if (config.targetProfitPct != null && config.targetProfitPct > 0) {
+      const move = fillPrice * (config.targetProfitPct / 100);
+      tp = signal.side === "buy" ? fillPrice + move : fillPrice - move;
+    } else {
+      const move = config.targetProfitUsdt / fillQty;
+      tp = signal.side === "buy" ? fillPrice + move : fillPrice - move;
+    }
+
+    let sl: number;
+    if (signal.slPrice != null) {
+      // SMC: absolute OB-edge level
+      sl = signal.slPrice;
+    } else {
+      const move = fillPrice * (config.slPct / 100);
+      sl = signal.side === "buy" ? fillPrice - move : fillPrice + move;
+    }
+
+    return { tp, sl };
   }
 
-  // SL: slPct% against entry
-  const slMove = entryPrice * (config.slPct / 100);
-  const slPrice = signal.side === "buy" ? entryPrice - slMove : entryPrice + slMove;
+  // Provisional TP/SL at signal entry price (used for the pending DB row only)
+  const provisional = computeTpSl(entryPrice, quantity);
 
   const sharedFields = {
     symbol: signal.symbol,
     gateSymbol: signal.gateSymbol,
     side: signal.side,
     positionSizeUsdt: parseFloat(positionSize.toFixed(4)),
-    slPrice: parseFloat(slPrice.toFixed(8)),
-    tpPrice: parseFloat(tpPrice.toFixed(8)),
+    slPrice: parseFloat(provisional.sl.toFixed(8)),
+    tpPrice: parseFloat(provisional.tp.toFixed(8)),
     bbUpper: signal.bbUpper,
     bbLower: signal.bbLower,
     bbMid: signal.bbMid,
@@ -170,16 +185,21 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     }
 
     const qty = positionSize / livePrice;
+    // Recompute TP/SL at actual live fill price so the sync loop checks the right levels
+    const { tp: paperTp, sl: paperSl } = computeTpSl(livePrice, qty);
+
     await db.update(scalperTradesTable).set({
       status: "paper",
       entryPrice: livePrice,
       livePrice,
       quantity: parseFloat(qty.toFixed(8)),
+      tpPrice: parseFloat(paperTp.toFixed(8)),
+      slPrice: parseFloat(paperSl.toFixed(8)),
       pnl: 0,
     }).where(eq(scalperTradesTable.id, trade.id));
 
     logger.info(
-      { tradeId: trade.id, symbol: signal.symbol, side: signal.side, entryPrice: livePrice, positionSize, tpPrice, slPrice },
+      { tradeId: trade.id, symbol: signal.symbol, side: signal.side, entryPrice: livePrice, positionSize, tpPrice: paperTp, slPrice: paperSl },
       "Scalper paper trade recorded"
     );
     return null;
