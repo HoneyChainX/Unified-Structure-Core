@@ -133,6 +133,7 @@ interface ScalperPerformance {
 interface LiveScanEntry {
   gateSymbol: string;
   lastClose: number;
+  inAllowlist: boolean;
   bbRsi: {
     detected: boolean;
     side: "buy" | "sell" | null;
@@ -606,8 +607,13 @@ export function ScalperPage() {
                         }`}
                       >
                         <td className={`px-3 py-2.5 font-bold ${anySignal ? "text-foreground" : "text-muted-foreground"}`}>
-                          {row.gateSymbol.replace("_USDT", "")}
-                          {bothSignals && <span className="ml-1.5 text-yellow-400 text-xs">★</span>}
+                          <span className="flex items-center gap-1.5">
+                            {row.gateSymbol.replace("_USDT", "")}
+                            {row.inAllowlist && (
+                              <span title="In your trading allowlist" className="text-orange-400 text-xs">▣</span>
+                            )}
+                            {bothSignals && <span className="text-yellow-400 text-xs">★</span>}
+                          </span>
                         </td>
                         <td className="px-3 py-2.5">{row.lastClose.toPrecision(6)}</td>
                         <td className={`px-3 py-2.5 ${row.bbRsi.rsi != null && row.bbRsi.rsi <= 35 ? "text-green-400 font-bold" : row.bbRsi.rsi != null && row.bbRsi.rsi >= 65 ? "text-red-400 font-bold" : ""}`}>

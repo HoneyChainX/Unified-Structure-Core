@@ -21,6 +21,8 @@ export let scalperLoopLastSignalCount = 0;
 export interface LiveScanEntry {
   gateSymbol: string;
   lastClose: number;
+  /** true = this pair is in the configured allowlist and will actually be traded */
+  inAllowlist: boolean;
   bbRsi: {
     detected: boolean;
     side: "buy" | "sell" | null;
@@ -45,22 +47,33 @@ export let scalperLiveScanAt: Date | null = null;
 
 // ── Dual-strategy scan (display only, no execution) ──────────────────────
 
+const LIVE_SCAN_TOTAL = 12; // max symbols shown in monitor
+
 async function runLiveDualScan(): Promise<void> {
   const [config] = await db.select().from(scalperConfigTable).limit(1);
 
   const allowlistRaw = config?.symbolAllowlist?.trim();
-  let symbols: string[] = allowlistRaw
+  const allowlistSymbols: string[] = allowlistRaw
     ? allowlistRaw.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean)
     : [];
 
-  if (symbols.length === 0) {
-    try {
-      symbols = await getTopUsdtSymbols(8);
-    } catch (err) {
-      logger.error({ err }, "Live dual scan: failed to fetch top symbols");
-      return;
-    }
+  // Always fetch top-N by volume to fill out the monitor
+  let topSymbols: string[] = [];
+  try {
+    topSymbols = await getTopUsdtSymbols(LIVE_SCAN_TOTAL);
+  } catch (err) {
+    logger.error({ err }, "Live dual scan: failed to fetch top symbols");
+    // Fall back to allowlist only if top-symbols fetch fails
+    topSymbols = [];
   }
+
+  // Priority order: allowlist first, then top-volume pairs not already in allowlist
+  const allowlistSet = new Set(allowlistSymbols);
+  const fillSymbols = topSymbols.filter((s) => !allowlistSet.has(s));
+  const symbols = [
+    ...allowlistSymbols,
+    ...fillSymbols,
+  ].slice(0, LIVE_SCAN_TOTAL);
 
   const longOnly = config?.longOnly ?? false;
   const bbParams = {
@@ -90,6 +103,7 @@ async function runLiveDualScan(): Promise<void> {
       results.push({
         gateSymbol: sym,
         lastClose,
+        inAllowlist: allowlistSet.size > 0 ? allowlistSet.has(sym) : false,
         bbRsi: {
           detected: bbSignal !== null,
           side: bbSignal ? bbSignal.side : null,
