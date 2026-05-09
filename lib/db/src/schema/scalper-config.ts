@@ -49,6 +49,9 @@ export const scalperConfigTable = pgTable("scalper_config", {
   // Long/short filter
   longOnly: boolean("long_only").notNull().default(false),
 
+  // Dynamic TP — when true, executor targets the opposite Bollinger Band instead of a fixed $ or % amount
+  dynamicTp: boolean("dynamic_tp").notNull().default(false),
+
   // Strategy engine: "bb_rsi" (default BB+RSI+volume) or "smc_mss" (MSS+OB+Fib)
   strategy: text("strategy").notNull().default("bb_rsi"),
 

@@ -135,6 +135,10 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     if (signal.tpPrice != null) {
       // SMC: absolute Fib level — does not depend on fill price
       tp = signal.tpPrice;
+    } else if (config.dynamicTp) {
+      // Dynamic: target the opposite Bollinger Band (mean-reversion to the far band)
+      // LONG entered at/near lower band → target upper band; SHORT → target lower band
+      tp = signal.side === "buy" ? signal.bbUpper : signal.bbLower;
     } else if (config.targetProfitPct != null && config.targetProfitPct > 0) {
       const move = fillPrice * (config.targetProfitPct / 100);
       tp = signal.side === "buy" ? fillPrice + move : fillPrice - move;

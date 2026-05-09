@@ -136,6 +136,7 @@ interface ScalperConfig {
   compoundingEnabled: boolean;
   compoundBalance: number | null;
   longOnly: boolean;
+  dynamicTp: boolean;
   symbolAllowlist: string | null;
   scanPoolSize: number;
   strategy: string;
@@ -1004,40 +1005,59 @@ export function ScalperPage() {
             <label className="text-xs text-muted-foreground tracking-widest flex items-center gap-2">
               <DollarSign className="w-3 h-3" />TARGET PROFIT PER TRADE
             </label>
-            <div className="flex gap-2">
-              <button
-                onClick={() => set("targetProfitPct", null)}
-                className={`flex-1 py-1.5 text-xs font-mono border transition-colors ${field("targetProfitPct", null) == null ? "border-primary bg-primary/10 text-primary" : "border-border bg-secondary text-muted-foreground"}`}
-              >FIXED USDT</button>
-              <button
-                onClick={() => { if (field("targetProfitPct", null) == null) set("targetProfitPct", 1); }}
-                className={`flex-1 py-1.5 text-xs font-mono border transition-colors ${field("targetProfitPct", null) != null ? "border-emerald-500 bg-emerald-500/10 text-emerald-400" : "border-border bg-secondary text-muted-foreground"}`}
-              >% OF ENTRY</button>
-            </div>
-            {field("targetProfitPct", null) == null ? (
-              <>
-                <input
-                  type="number" min={0.1} step={0.5}
-                  value={field("targetProfitUsdt", 2) as number}
-                  onChange={(e) => set("targetProfitUsdt", parseFloat(e.target.value))}
-                  className="w-full bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary"
-                />
-                <p className="text-xs text-muted-foreground">TP placed to achieve this fixed $ profit on the full position</p>
-              </>
-            ) : (
-              <>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number" min={0.1} max={20} step={0.1}
-                    value={field("targetProfitPct", 1) as number}
-                    onChange={(e) => set("targetProfitPct", parseFloat(e.target.value))}
-                    className="flex-1 bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-emerald-500"
-                  />
-                  <span className="text-emerald-400 font-mono font-bold text-lg">%</span>
-                </div>
-                <p className="text-xs text-muted-foreground">TP placed this % above entry (long) or below (short) — adapts to any position size</p>
-              </>
-            )}
+            {(() => {
+              const isDynamic = field("dynamicTp", false) as boolean;
+              const tpPct = field("targetProfitPct", null) as number | null;
+              const tpMode = isDynamic ? "auto" : tpPct != null ? "pct" : "usdt";
+              return (
+                <>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => { set("dynamicTp", false); set("targetProfitPct", null); }}
+                      className={`flex-1 py-1.5 text-xs font-mono border transition-colors ${tpMode === "usdt" ? "border-primary bg-primary/10 text-primary" : "border-border bg-secondary text-muted-foreground"}`}
+                    >FIXED USDT</button>
+                    <button
+                      onClick={() => { set("dynamicTp", false); if (tpPct == null) set("targetProfitPct", 1); }}
+                      className={`flex-1 py-1.5 text-xs font-mono border transition-colors ${tpMode === "pct" ? "border-emerald-500 bg-emerald-500/10 text-emerald-400" : "border-border bg-secondary text-muted-foreground"}`}
+                    >% OF ENTRY</button>
+                    <button
+                      onClick={() => { set("dynamicTp", true); set("targetProfitPct", null); }}
+                      className={`flex-1 py-1.5 text-xs font-mono border transition-colors ${tpMode === "auto" ? "border-violet-500 bg-violet-500/10 text-violet-300" : "border-border bg-secondary text-muted-foreground"}`}
+                    >AUTO BB</button>
+                  </div>
+                  {tpMode === "usdt" && (
+                    <>
+                      <input
+                        type="number" min={0.1} step={0.5}
+                        value={field("targetProfitUsdt", 2) as number}
+                        onChange={(e) => set("targetProfitUsdt", parseFloat(e.target.value))}
+                        className="w-full bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary"
+                      />
+                      <p className="text-xs text-muted-foreground">TP placed to achieve this fixed $ profit on the full position</p>
+                    </>
+                  )}
+                  {tpMode === "pct" && (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number" min={0.1} max={20} step={0.1}
+                          value={tpPct ?? 1}
+                          onChange={(e) => set("targetProfitPct", parseFloat(e.target.value))}
+                          className="flex-1 bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-emerald-500"
+                        />
+                        <span className="text-emerald-400 font-mono font-bold text-lg">%</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">TP placed this % above entry (long) or below (short) — adapts to any position size</p>
+                    </>
+                  )}
+                  {tpMode === "auto" && (
+                    <p className="text-xs text-violet-300/80 border border-violet-500/30 bg-violet-500/10 px-3 py-2">
+                      Bot targets the opposite Bollinger Band — upper band for longs, lower band for shorts. TP adapts to current market volatility automatically.
+                    </p>
+                  )}
+                </>
+              );
+            })()}
           </div>
 
           {/* SL % */}

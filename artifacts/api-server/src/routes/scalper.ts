@@ -22,7 +22,7 @@ router.get("/config", async (req, res): Promise<void> => {
 router.put("/config", async (req, res): Promise<void> => {
   const body = req.body as Record<string, unknown>;
   const allowed = [
-    "enabled", "paperMode", "longOnly",
+    "enabled", "paperMode", "longOnly", "dynamicTp",
     "positionSizeUsdt", "positionSizePct", "targetProfitUsdt", "targetProfitPct", "slPct",
     "maxOpenTrades", "cooldownMinutes",
     "bbPeriod", "bbStdDev",
