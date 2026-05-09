@@ -22,10 +22,21 @@ export async function runScalperScan(): Promise<void> {
     return;
   }
 
-  logger.debug("Scalper loop: starting symbol scan");
+  // Determine symbols to scan:
+  // - If an allowlist is configured → scan those pairs (candle data is public, no auth needed)
+  // - Otherwise → fall back to top-5 by volume
+  const allowlistRaw = config.symbolAllowlist?.trim();
+  const allowlistSymbols = allowlistRaw
+    ? allowlistRaw.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean)
+    : null;
 
-  // Candle data is a public endpoint — scan all top-5 pairs freely, no auth needed.
-  // The trading allowlist is enforced at order placement time in the executor.
+  logger.debug(
+    allowlistSymbols
+      ? { count: allowlistSymbols.length, symbols: allowlistSymbols }
+      : "no allowlist — using top-5 by volume",
+    "Scalper loop: starting symbol scan"
+  );
+
   const signals = await scanForSignals({
     bbPeriod: config.bbPeriod,
     bbStdDev: config.bbStdDev,
@@ -34,6 +45,7 @@ export async function runScalperScan(): Promise<void> {
     rsiOverbought: config.rsiOverbought,
     volumeSpikeMultiplier: config.volumeSpikeMultiplier,
     longOnly: config.longOnly,
+    symbols: allowlistSymbols ?? undefined,
   });
 
   scalperLoopLastRunAt = new Date();
