@@ -47,10 +47,10 @@ export let scalperLiveScanAt: Date | null = null;
 
 // ── Dual-strategy scan (display only, no execution) ──────────────────────
 
-const LIVE_SCAN_TOTAL = 12; // max symbols shown in monitor
-
 async function runLiveDualScan(): Promise<void> {
   const [config] = await db.select().from(scalperConfigTable).limit(1);
+
+  const scanPoolSize = config?.scanPoolSize ?? 20;
 
   const allowlistRaw = config?.symbolAllowlist?.trim();
   const allowlistSymbols: string[] = allowlistRaw
@@ -60,7 +60,7 @@ async function runLiveDualScan(): Promise<void> {
   // Always fetch top-N by volume to fill out the monitor
   let topSymbols: string[] = [];
   try {
-    topSymbols = await getTopUsdtSymbols(LIVE_SCAN_TOTAL);
+    topSymbols = await getTopUsdtSymbols(scanPoolSize);
   } catch (err) {
     logger.error({ err }, "Live dual scan: failed to fetch top symbols");
     // Fall back to allowlist only if top-symbols fetch fails
@@ -73,7 +73,7 @@ async function runLiveDualScan(): Promise<void> {
   const symbols = [
     ...allowlistSymbols,
     ...fillSymbols,
-  ].slice(0, LIVE_SCAN_TOTAL);
+  ].slice(0, scanPoolSize);
 
   const longOnly = config?.longOnly ?? false;
   const bbParams = {
@@ -151,30 +151,34 @@ export async function runScalperScan(): Promise<void> {
     ? allowlistRaw.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean)
     : null;
 
+  const scanPoolSize = config.scanPoolSize ?? 20;
   const strategy = config.strategy ?? "bb_rsi";
+
+  // When no allowlist is set, resolve the scan pool from top-N by volume.
+  // This ensures execution covers the same breadth as the live monitor.
+  let resolvedSymbols: string[] | null = allowlistSymbols;
+  if (!allowlistSymbols) {
+    try {
+      resolvedSymbols = await getTopUsdtSymbols(scanPoolSize);
+    } catch (err) {
+      logger.error({ err }, "Scalper: failed to fetch top symbols, skipping cycle");
+      scalperLoopLastRunAt = new Date();
+      scalperLoopLastSignalCount = 0;
+      return;
+    }
+  }
 
   logger.debug(
     allowlistSymbols
       ? { count: allowlistSymbols.length, symbols: allowlistSymbols, strategy }
-      : { strategy, note: "no allowlist — using top-5 by volume" },
+      : { strategy, scanPoolSize, symbols: resolvedSymbols?.length, note: "no allowlist — scanning top by volume" },
     "Scalper loop: starting symbol scan"
   );
 
   let signals;
 
   if (strategy === "smc_mss") {
-    let symbols = allowlistSymbols;
-    if (!symbols) {
-      try {
-        symbols = await getTopUsdtSymbols(5);
-      } catch (err) {
-        logger.error({ err }, "Scalper SMC: failed to fetch top symbols");
-        scalperLoopLastRunAt = new Date();
-        scalperLoopLastSignalCount = 0;
-        return;
-      }
-    }
-    signals = await scanForSMCSignals({ longOnly: config.longOnly, symbols });
+    signals = await scanForSMCSignals({ longOnly: config.longOnly, symbols: resolvedSymbols! });
   } else {
     signals = await scanForSignals({
       bbPeriod: config.bbPeriod,
@@ -186,7 +190,7 @@ export async function runScalperScan(): Promise<void> {
       longOnly: config.longOnly,
       emaFilterEnabled: config.emaFilterEnabled,
       emaPeriod: config.emaPeriod,
-      symbols: allowlistSymbols ?? undefined,
+      symbols: resolvedSymbols ?? undefined,
     });
   }
 

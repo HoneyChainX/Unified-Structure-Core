@@ -16,8 +16,12 @@ export const scalperConfigTable = pgTable("scalper_config", {
   cooldownMinutes: integer("cooldown_minutes").notNull().default(5),
 
   // Symbol allowlist (comma-separated Gate.io pairs, e.g. "BTC_USDT,ETH_USDT")
-  // null = scan top-5 by volume (default)
+  // null/empty = scan top-N by volume (N = scanPoolSize). Allowlist pairs are always included first.
   symbolAllowlist: text("symbol_allowlist"),
+
+  // How many symbols to scan for signals when no allowlist is set (or to fill remaining slots).
+  // Higher = broader market coverage, more API calls per cycle.
+  scanPoolSize: integer("scan_pool_size").notNull().default(20),
 
   // Bollinger Band params
   bbPeriod: integer("bb_period").notNull().default(20),

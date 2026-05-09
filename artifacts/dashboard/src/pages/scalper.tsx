@@ -80,6 +80,7 @@ interface ScalperConfig {
   compoundBalance: number | null;
   longOnly: boolean;
   symbolAllowlist: string | null;
+  scanPoolSize: number;
   strategy: string;
   updatedAt: string;
 }
@@ -1029,12 +1030,34 @@ export function ScalperPage() {
             />
             <div className="space-y-1">
               <p className="text-xs text-muted-foreground">
-                <span className="text-green-400 font-mono">SCAN</span> — always free. Candle data is a public endpoint, your API key is never involved. The bot scans any pair.
+                <span className="text-green-400 font-mono">SCAN</span> — candle data is a public endpoint, your API key is never involved. Leave blank to trade any pair from the scan pool.
               </p>
               <p className="text-xs text-muted-foreground">
-                <span className="text-orange-400 font-mono">TRADE</span> — restricted by your Gate.io API key. List only the pairs your key is allowed to trade. Signals on unlisted pairs are detected but skipped at order time. Manual entry always overrides this.
+                <span className="text-orange-400 font-mono">TRADE</span> — if set, only these pairs are eligible for order placement. Signals on other pairs are detected but skipped. Manual entry always overrides this.
               </p>
             </div>
+          </div>
+
+          {/* Scan pool size */}
+          <div className="space-y-2">
+            <label className="text-xs text-muted-foreground tracking-widest flex items-center gap-2">
+              <span className="text-cyan-400">▣</span> SCAN POOL SIZE
+            </label>
+            <div className="flex items-center gap-3">
+              <input
+                type="number"
+                min={5}
+                max={100}
+                step={5}
+                value={field("scanPoolSize", 20)}
+                onChange={(e) => set("scanPoolSize", parseInt(e.target.value) || 20)}
+                className="w-24 bg-secondary border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:border-cyan-400"
+              />
+              <span className="text-xs text-muted-foreground">pairs scanned per cycle when no allowlist is set</span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Top-N USDT pairs by 24h volume are scanned for signals. Allowlist pairs are always included first, then volume fills the remaining slots up to this limit. Higher = more market coverage, slightly more API calls per 2.5-min cycle.
+            </p>
           </div>
         </div>
 
@@ -1340,14 +1363,14 @@ export function ScalperPage() {
         </div>
         {field("strategy", "bb_rsi") === "bb_rsi" ? (
           <>
-            <div>Every 5 minutes, scans your allowlisted pairs (or top-5 USDT by volume) on Gate.io.</div>
+            <div>Every 2.5 minutes, scans your allowlisted pairs (or top-{field("scanPoolSize", 20)} USDT pairs by volume) on Gate.io.</div>
             <div>For each symbol, fetches 60 × 5m candles and checks: <span className="text-yellow-400">BB touch + RSI extreme + volume spike</span> — all three must fire together.</div>
             <div>With EMA filter on: only longs above {field("emaPeriod", 50)}-EMA, only shorts below it — no trading against the trend.</div>
             <div>Target profit is <span className="text-green-400">${fmt(field("targetProfitUsdt", 2), 2)} USDT</span> per trade — TP is auto-calculated based on position size and exact fill price.</div>
           </>
         ) : (
           <>
-            <div>Every 5 minutes, scans your allowlisted pairs (or top-5 USDT by volume) on Gate.io.</div>
+            <div>Every 2.5 minutes, scans your allowlisted pairs (or top-{field("scanPoolSize", 20)} USDT pairs by volume) on Gate.io.</div>
             <div>For each symbol, fetches 150 × 5m candles and looks for a <span className="text-violet-400">Market Structure Shift</span> — a candle closing above/below a prior swing high/low after a swing.</div>
             <div>Identifies the <span className="text-yellow-400">Order Block</span> (last bearish candle before bullish MSS, or last bullish candle before bearish MSS) and waits for price to retrace into the OB body.</div>
             <div>Entry fires when a candle <span className="text-green-400">closes inside the OB body</span> — no wick traps. TP is the <span className="text-violet-400">Fib 4.236 extension</span> of the MSS swing. SL is below/above the OB edge.</div>
