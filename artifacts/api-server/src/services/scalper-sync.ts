@@ -98,13 +98,29 @@ async function syncScalperTrade(trade: typeof scalperTradesTable.$inferSelect): 
   if (trade.tpOrderId) orderChecks.push({ orderId: Number(trade.tpOrderId), reason: "tp" });
   if (trade.slOrderId) orderChecks.push({ orderId: Number(trade.slOrderId), reason: "sl" });
 
+  // Tracks whether every checked order has reached a terminal non-fill state.
+  // If true after the loop, we fall through to the price-based fallback.
+  let allOrdersTerminal = orderChecks.length > 0;
+
   for (const { orderId, reason } of orderChecks) {
     try {
       const order = await getPriceTriggeredOrder(orderId, gateSymbol);
 
       if (order.status === "finish") {
-        const closePrice = parseFloat(order.put.avg_deal_price || order.put.price);
         const filledQty = parseFloat(order.put.amount) - parseFloat(order.put.left || "0");
+
+        if (filledQty <= 0) {
+          // Trigger fired but the underlying limit order didn't fill (price gapped through limit).
+          // Treat as terminal — fall through to price-based fallback below.
+          logger.warn(
+            { tradeId: id, orderId, reason },
+            "Scalper: price-triggered order fired but underlying order unfilled (price gap) — using price fallback"
+          );
+          continue; // stays allOrdersTerminal=true
+        }
+
+        // Order successfully filled — close the DB trade
+        const closePrice = parseFloat(order.put.avg_deal_price || order.put.price);
         const pnl =
           entryPrice != null && filledQty > 0
             ? (side === "buy" ? closePrice - entryPrice : entryPrice - closePrice) * filledQty
@@ -118,17 +134,16 @@ async function syncScalperTrade(trade: typeof scalperTradesTable.$inferSelect): 
           closedAt: new Date(),
         }).where(eq(scalperTradesTable.id, id));
 
-        logger.info({ tradeId: id, reason, closePrice, pnl }, "Scalper: live trade closed via order fill");
+        logger.info({ tradeId: id, reason, closePrice, filledQty, pnl }, "Scalper: live trade closed via order fill");
         if (pnl != null) await updateScalperCompoundBalance(pnl);
 
-        // Cancel the other order to prevent dangling orders on Gate.io
+        // Cancel the companion order to prevent a dangling TP/SL on Gate.io
         const otherOrderId = reason === "tp" ? trade.slOrderId : trade.tpOrderId;
         if (otherOrderId) {
           try {
             await cancelPriceTriggeredOrder(Number(otherOrderId), gateSymbol);
-            logger.info({ tradeId: id, cancelledOrderId: otherOrderId, reason: `other-after-${reason}` }, "Scalper: cancelled companion order");
+            logger.info({ tradeId: id, cancelledOrderId: otherOrderId }, "Scalper: cancelled companion order");
           } catch (cancelErr) {
-            // Non-fatal: order may have already been cancelled or expired
             logger.warn({ tradeId: id, otherOrderId, cancelErr }, "Scalper: failed to cancel companion order (may already be gone)");
           }
         }
@@ -136,25 +151,40 @@ async function syncScalperTrade(trade: typeof scalperTradesTable.$inferSelect): 
         return;
       }
 
+      if (order.status === "open") {
+        // Still waiting for trigger price — not terminal
+        allOrdersTerminal = false;
+      }
+
       if (order.status === "cancelled" || order.status === "expired" || order.status === "failed") {
-        logger.warn({ tradeId: id, orderId, status: order.status }, "Scalper: price-triggered order is no longer active");
+        // Order ended without filling — stays allOrdersTerminal=true, will run price fallback
+        logger.warn({ tradeId: id, orderId, reason, status: order.status }, "Scalper: price-triggered order terminated without fill");
       }
     } catch (err) {
+      // Can't reach Gate.io or order not found — be conservative, don't assume terminal
+      allOrdersTerminal = false;
       logger.warn({ tradeId: id, orderId, err }, "Scalper sync: failed to check price-triggered order");
     }
   }
 
-  // ── Live trade fallback: price-based TP/SL when no order IDs exist ────────
-  // Handles cases where TP/SL order placement failed after a successful entry
-  if (orderChecks.length === 0 && trade.tpPrice != null && trade.slPrice != null) {
+  // ── Price-based fallback ──────────────────────────────────────────────────
+  // Runs when:
+  //   (a) No TP/SL order IDs were ever stored (placement failed at entry), OR
+  //   (b) All checked orders reached terminal non-fill states (cancelled/expired/failed/unfilled limit)
+  // In case (b) the position is still open on Gate.io — this is the safety net that catches it.
+  const shouldFallback =
+    (orderChecks.length === 0 || allOrdersTerminal) &&
+    trade.tpPrice != null && trade.slPrice != null;
+
+  if (shouldFallback) {
     try {
       const livePrice = await getLivePrice(gateSymbol);
-      const tpHit = side === "buy" ? livePrice >= trade.tpPrice : livePrice <= trade.tpPrice;
-      const slHit = side === "buy" ? livePrice <= trade.slPrice : livePrice >= trade.slPrice;
+      const tpHit = side === "buy" ? livePrice >= trade.tpPrice! : livePrice <= trade.tpPrice!;
+      const slHit = side === "buy" ? livePrice <= trade.slPrice! : livePrice >= trade.slPrice!;
       const closeReason: "tp" | "sl" | null = tpHit ? "tp" : slHit ? "sl" : null;
 
       if (closeReason) {
-        const closePrice = closeReason === "tp" ? trade.tpPrice : trade.slPrice;
+        const closePrice = closeReason === "tp" ? trade.tpPrice! : trade.slPrice!;
         const pnl =
           entryPrice != null && quantity != null
             ? (side === "buy" ? closePrice - entryPrice : entryPrice - closePrice) * quantity
@@ -169,19 +199,29 @@ async function syncScalperTrade(trade: typeof scalperTradesTable.$inferSelect): 
           closedAt: new Date(),
         }).where(eq(scalperTradesTable.id, id));
 
-        logger.warn({ tradeId: id, closeReason, closePrice }, "Scalper: live trade force-closed via price fallback (no order IDs)");
+        logger.warn(
+          { tradeId: id, closeReason, closePrice, allOrdersTerminal },
+          "Scalper: live trade force-closed via price fallback"
+        );
         if (pnl != null) await updateScalperCompoundBalance(pnl);
         return;
       }
 
-      await db.update(scalperTradesTable).set({ livePrice }).where(eq(scalperTradesTable.id, id));
+      // Trade still within TP/SL range — update live P&L
+      const pnl =
+        entryPrice != null && quantity != null
+          ? (side === "buy" ? livePrice - entryPrice : entryPrice - livePrice) * quantity
+          : null;
+      await db.update(scalperTradesTable)
+        .set({ livePrice, pnl: pnl != null ? parseFloat(pnl.toFixed(4)) : null })
+        .where(eq(scalperTradesTable.id, id));
     } catch {
       // Non-critical
     }
     return;
   }
 
-  // ── Update live P&L for open live trade ──────────────────────────────────
+  // ── Update live P&L — orders are still active (waiting to trigger) ────────
   try {
     const livePrice = await getLivePrice(gateSymbol);
     const pnl =

@@ -176,7 +176,10 @@ export async function placePriceTriggeredOrder(params: {
   side: "buy" | "sell";
   amount: string;
   orderPrice: string;
+  /** "market" guarantees fill even when price gaps through the trigger level (recommended for SL) */
+  orderType?: "limit" | "market";
 }): Promise<PriceTriggeredOrder> {
+  const isMarket = params.orderType === "market";
   const body = {
     trigger: {
       price: params.triggerPrice,
@@ -184,12 +187,13 @@ export async function placePriceTriggeredOrder(params: {
       expiration: 86400 * 7,
     },
     put: {
-      type: "limit",
+      type: isMarket ? "market" : "limit",
       side: params.side,
-      price: params.orderPrice,
+      // Gate.io requires price="0" for market put orders
+      price: isMarket ? "0" : params.orderPrice,
       amount: params.amount,
       account: "normal",
-      time_in_force: "gtc",
+      time_in_force: isMarket ? "ioc" : "gtc",
     },
     market: params.currencyPair,
   };

@@ -273,6 +273,21 @@ export function ScalperPage() {
     refetchPerf();
   }
 
+  const [forceClosing, setForceClosing] = useState<number | null>(null);
+
+  async function forceCloseTrade(id: number) {
+    if (!confirm("Force-close this live position at market price now? This places an immediate market sell order on Gate.io.")) return;
+    setForceClosing(id);
+    try {
+      await api(`/api/scalper/trade/${id}/close`, { method: "POST" });
+      setTimeout(() => { refetchOpen(); refetchClosed(); refetchPerf(); refetchStatus(); }, 1000);
+    } catch (e) {
+      alert(`Force close failed: ${String(e)}`);
+    } finally {
+      setForceClosing(null);
+    }
+  }
+
   async function manualScan() {
     if (!manualSymbol.trim()) return;
     setManualScanning(true);
@@ -547,12 +562,25 @@ export function ScalperPage() {
                     </td>
                     <td className="px-3 py-2">{fmt(t.rsi, 1)}</td>
                     <td className="px-3 py-2">
-                      <button
-                        onClick={() => cancelTrade(t.id)}
-                        className="text-red-400 hover:text-red-300 text-xs border border-red-500/30 px-2 py-0.5 hover:border-red-400/50 transition-colors"
-                      >
-                        Cancel
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        {!t.paperMode && (
+                          <button
+                            onClick={() => forceCloseTrade(t.id)}
+                            disabled={forceClosing === t.id}
+                            title="Close position at market price via Gate.io immediately"
+                            className="text-orange-400 hover:text-orange-300 text-xs border border-orange-500/40 px-2 py-0.5 hover:border-orange-400/60 transition-colors disabled:opacity-50"
+                          >
+                            {forceClosing === t.id ? "Closing…" : "Close Now"}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => cancelTrade(t.id)}
+                          className="text-muted-foreground hover:text-red-300 text-xs border border-border hover:border-red-500/30 px-2 py-0.5 transition-colors"
+                          title="Cancel DB tracking only (does NOT close the Gate.io position)"
+                        >
+                          Cancel
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

@@ -283,7 +283,8 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       logger.warn({ tradeId: trade.id, err }, "Scalper: failed to place TP order");
     }
 
-    // SL order
+    // SL order — market type guarantees fill even when price gaps hard through the SL level.
+    // A limit order at SL*0.999 can be skipped entirely if price candles past that level.
     try {
       const slOrder = await placePriceTriggeredOrder({
         currencyPair: signal.gateSymbol,
@@ -291,7 +292,8 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
         triggerRule: signal.side === "buy" ? "<=" : ">=",
         side: signal.side === "buy" ? "sell" : "buy",
         amount: filledQty.toFixed(8),
-        orderPrice: (signal.side === "buy" ? actualSl * 0.999 : actualSl * 1.001).toFixed(8),
+        orderPrice: "0",   // ignored for market put orders
+        orderType: "market",
       });
       orderUpdates.slOrderId = slOrder.id.toString();
     } catch (err) {

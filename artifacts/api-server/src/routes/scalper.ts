@@ -487,4 +487,81 @@ router.post("/trade/manual", async (req, res): Promise<void> => {
   }
 });
 
+// ── Force-close a stuck live trade ───────────────────────────────────────────
+// Cancels any pending TP/SL price-triggered orders on Gate.io, then places a
+// market sell/buy to immediately close the spot position. Use for trades where
+// the SL limit order failed to fill (e.g. price gapped through the limit level).
+
+router.post("/trade/:id/close", async (req, res): Promise<void> => {
+  const tradeId = parseInt(req.params["id"] ?? "");
+  if (isNaN(tradeId)) { res.status(400).json({ error: "Invalid trade ID" }); return; }
+
+  const [trade] = await db
+    .select()
+    .from(scalperTradesTable)
+    .where(eq(scalperTradesTable.id, tradeId))
+    .limit(1);
+
+  if (!trade) { res.status(404).json({ error: "Trade not found" }); return; }
+  if (trade.status !== "open") {
+    res.status(400).json({ error: `Trade is not open (status: ${trade.status})` });
+    return;
+  }
+  if (trade.paperMode) {
+    res.status(400).json({ error: "Paper trades cannot be force-closed via Gate.io — use Cancel instead" });
+    return;
+  }
+  if (!trade.quantity || !trade.gateSymbol) {
+    res.status(400).json({ error: "Trade is missing quantity or symbol — cannot close" });
+    return;
+  }
+
+  // Cancel any pending TP/SL price-triggered orders (non-fatal if already gone)
+  for (const orderId of [trade.tpOrderId, trade.slOrderId]) {
+    if (!orderId) continue;
+    try {
+      await cancelPriceTriggeredOrder(Number(orderId), trade.gateSymbol);
+      req.log.info({ tradeId, orderId }, "Force close: cancelled companion order");
+    } catch (err) {
+      req.log.warn({ tradeId, orderId, err }, "Force close: could not cancel companion order (may already be gone)");
+    }
+  }
+
+  // Place an immediate market order to close the spot position
+  try {
+    const closeSide: "buy" | "sell" = trade.side === "buy" ? "sell" : "buy";
+    const closeOrder = await placeSpotOrder({
+      currencyPair: trade.gateSymbol,
+      side: closeSide,
+      amount: trade.quantity.toString(),
+      type: "market",
+    });
+
+    const closePrice = parseFloat(closeOrder.avg_deal_price || closeOrder.price);
+    const filledQty  = parseFloat(closeOrder.filled_amount  || closeOrder.amount);
+    const pnl =
+      trade.entryPrice != null && filledQty > 0
+        ? (trade.side === "buy"
+            ? closePrice - trade.entryPrice
+            : trade.entryPrice - closePrice) * filledQty
+        : null;
+
+    await db.update(scalperTradesTable).set({
+      status:      "closed",
+      closePrice,
+      closeReason: "manual",
+      pnl:         pnl != null ? parseFloat(pnl.toFixed(4)) : null,
+      closedAt:    new Date(),
+    }).where(eq(scalperTradesTable.id, tradeId));
+
+    req.log.info({ tradeId, closePrice, filledQty, pnl }, "Scalper: trade force-closed by user");
+    res.json({ ok: true, closePrice, filledQty, pnl });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    req.log.error({ tradeId, err: msg }, "Scalper: force close failed");
+    res.status(502).json({ error: msg });
+  }
+});
+
 export default router;
+
