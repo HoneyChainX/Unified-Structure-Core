@@ -108,10 +108,13 @@ interface ScalperTrade {
   livePrice: number | null;
   tpPrice: number | null;
   slPrice: number | null;
+  tpOrderId: string | null;
+  slOrderId: string | null;
   closePrice: number | null;
   closeReason: string | null;
   pnl: number | null;
   paperMode: boolean;
+  errorMessage: string | null;
   rsi: number | null;
   volumeRatio: number | null;
   createdAt: string;
@@ -676,16 +679,35 @@ export function ScalperPage() {
                 </tr>
               </thead>
               <tbody>
-                {openTrades.map((t) => (
-                  <tr key={t.id} className="border-b border-border/50 hover:bg-secondary/20">
-                    <td className="px-3 py-2 font-bold">{t.symbol}</td>
+                {openTrades.map((t) => {
+                  const unprotected = !t.paperMode && !t.tpOrderId && !t.slOrderId;
+                  return (
+                  <tr key={t.id} className={`border-b border-border/50 hover:bg-secondary/20 ${unprotected ? "bg-red-500/5" : ""}`}>
+                    <td className="px-3 py-2 font-bold">
+                      <div className="flex items-center gap-1.5">
+                        {t.symbol}
+                        {unprotected && (
+                          <span
+                            title={t.errorMessage ?? "TP/SL orders not placed on Gate.io — position is unprotected. Sync will retry."}
+                            className="text-red-400 animate-pulse cursor-help"
+                          >
+                            ⚠
+                          </span>
+                        )}
+                      </div>
+                      {unprotected && (
+                        <div className="text-red-400/70 text-xs font-normal mt-0.5 max-w-[140px] truncate" title={t.errorMessage ?? ""}>
+                          {t.errorMessage ? t.errorMessage.split("|")[0]?.trim().replace(/Gate\.io \d+: /, "") : "no TP/SL on exchange"}
+                        </div>
+                      )}
+                    </td>
                     <td className={`px-3 py-2 font-bold ${t.side === "buy" ? "text-green-400" : "text-red-400"}`}>
                       {t.side === "buy" ? "LONG" : "SHORT"}
                     </td>
                     <td className="px-3 py-2">{fmt(t.entryPrice, 6)}</td>
                     <td className="px-3 py-2">{fmt(t.livePrice, 6)}</td>
-                    <td className="px-3 py-2 text-green-400">{fmt(t.tpPrice, 6)}</td>
-                    <td className="px-3 py-2 text-red-400">{fmt(t.slPrice, 6)}</td>
+                    <td className={`px-3 py-2 ${t.tpOrderId ? "text-green-400" : "text-green-400/40"}`}>{fmt(t.tpPrice, 6)}</td>
+                    <td className={`px-3 py-2 ${t.slOrderId ? "text-red-400" : "text-red-400/40"}`}>{fmt(t.slPrice, 6)}</td>
                     <td className="px-3 py-2">{fmt(t.positionSizeUsdt, 2)}</td>
                     <td className={`px-3 py-2 font-bold ${pnlClass(t.pnl)}`}>
                       {t.pnl != null ? `${t.pnl >= 0 ? "+" : ""}${t.pnl.toFixed(4)}` : "—"}
@@ -713,7 +735,8 @@ export function ScalperPage() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                );
+                })}
               </tbody>
             </table>
           </div>

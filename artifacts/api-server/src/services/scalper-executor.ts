@@ -16,6 +16,8 @@ import {
   getLivePrice,
   placeSpotOrder,
   placePriceTriggeredOrder,
+  fmtGatePrice,
+  fmtGateAmount,
 } from "./gateio";
 import type { ScalperSignal } from "./scalper-signals";
 import { logger } from "../lib/logger";
@@ -266,38 +268,48 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
 
     logger.info({ tradeId: trade.id, filledPrice, filledQty, tpPrice: actualTp, slPrice: actualSl }, "Scalper: entry filled");
 
-    const orderUpdates: { tpOrderId?: string; slOrderId?: string } = {};
+    const orderUpdates: { tpOrderId?: string; slOrderId?: string; errorMessage?: string } = {};
+    const orderErrors: string[] = [];
 
-    // TP order
+    // TP order — use precision-safe price/amount formatting for Gate.io
     try {
       const tpOrder = await placePriceTriggeredOrder({
         currencyPair: signal.gateSymbol,
-        triggerPrice: actualTp.toFixed(8),
+        triggerPrice: fmtGatePrice(actualTp),
         triggerRule: signal.side === "buy" ? ">=" : "<=",
         side: signal.side === "buy" ? "sell" : "buy",
-        amount: filledQty.toFixed(8),
-        orderPrice: actualTp.toFixed(8),
+        amount: fmtGateAmount(filledQty),
+        orderPrice: fmtGatePrice(actualTp),
       });
       orderUpdates.tpOrderId = tpOrder.id.toString();
+      logger.info({ tradeId: trade.id, tpOrderId: tpOrder.id, triggerPrice: fmtGatePrice(actualTp) }, "Scalper: TP order placed");
     } catch (err) {
-      logger.warn({ tradeId: trade.id, err }, "Scalper: failed to place TP order");
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn({ tradeId: trade.id, err: msg }, "Scalper: failed to place TP order");
+      orderErrors.push(`TP: ${msg}`);
     }
 
-    // SL order — market type guarantees fill even when price gaps hard through the SL level.
-    // A limit order at SL*0.999 can be skipped entirely if price candles past that level.
+    // SL order — market type guarantees fill even when price gaps hard through the SL level
     try {
       const slOrder = await placePriceTriggeredOrder({
         currencyPair: signal.gateSymbol,
-        triggerPrice: actualSl.toFixed(8),
+        triggerPrice: fmtGatePrice(actualSl),
         triggerRule: signal.side === "buy" ? "<=" : ">=",
         side: signal.side === "buy" ? "sell" : "buy",
-        amount: filledQty.toFixed(8),
+        amount: fmtGateAmount(filledQty),
         orderPrice: "0",   // ignored for market put orders
         orderType: "market",
       });
       orderUpdates.slOrderId = slOrder.id.toString();
+      logger.info({ tradeId: trade.id, slOrderId: slOrder.id, triggerPrice: fmtGatePrice(actualSl) }, "Scalper: SL order placed");
     } catch (err) {
-      logger.warn({ tradeId: trade.id, err }, "Scalper: failed to place SL order");
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn({ tradeId: trade.id, err: msg }, "Scalper: failed to place SL order");
+      orderErrors.push(`SL: ${msg}`);
+    }
+
+    if (orderErrors.length > 0) {
+      orderUpdates.errorMessage = orderErrors.join(" | ");
     }
 
     if (Object.keys(orderUpdates).length > 0) {

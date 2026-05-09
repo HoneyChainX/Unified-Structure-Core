@@ -213,6 +213,32 @@ export async function getSpotOrder(orderId: string, currencyPair: string): Promi
   return request<SpotOrder>("GET", `/spot/orders/${orderId}`, { currency_pair: currencyPair });
 }
 
+/**
+ * Format a price for Gate.io API calls.
+ * Gate.io enforces per-pair decimal precision — exceeding it causes INVALID_PARAM_VALUE.
+ * This adapts to price magnitude to stay within safe limits for all liquid USDT pairs.
+ */
+export function fmtGatePrice(price: number): string {
+  if (price >= 10000) return price.toFixed(1);
+  if (price >= 1000)  return price.toFixed(2);
+  if (price >= 100)   return price.toFixed(3);
+  if (price >= 10)    return price.toFixed(4);
+  if (price >= 1)     return price.toFixed(5);
+  if (price >= 0.1)   return price.toFixed(6);
+  return price.toFixed(8);
+}
+
+/**
+ * Format a base-currency amount for Gate.io API calls.
+ * 4 decimal places covers all major pairs; tiny amounts get more precision.
+ */
+export function fmtGateAmount(amount: number): string {
+  if (amount >= 100)  return amount.toFixed(2);
+  if (amount >= 1)    return amount.toFixed(4);
+  if (amount >= 0.01) return amount.toFixed(5);
+  return amount.toFixed(6);
+}
+
 export function toGateSymbol(tvSymbol: string): string {
   const quotes = ["USDT", "USDC", "BTC", "ETH", "BNB"];
   for (const q of quotes) {

@@ -15,7 +15,7 @@
 
 import { db, scalperConfigTable, scalperTradesTable } from "@workspace/db";
 import { eq, inArray } from "drizzle-orm";
-import { getLivePrice, getPriceTriggeredOrder, cancelPriceTriggeredOrder } from "./gateio";
+import { getLivePrice, getPriceTriggeredOrder, cancelPriceTriggeredOrder, placeSpotOrder, placePriceTriggeredOrder, fmtGatePrice, fmtGateAmount } from "./gateio";
 import { logger } from "../lib/logger";
 
 export let scalperLastSyncAt: Date | null = null;
@@ -167,11 +167,66 @@ async function syncScalperTrade(trade: typeof scalperTradesTable.$inferSelect): 
     }
   }
 
+  // ── TP/SL retry — placement failed at entry for one or both orders ───────
+  // Attempt to re-place whichever orders are missing on Gate.io so the position is protected.
+  // This runs every sync cycle until both orders succeed or the trade closes.
+  if ((!trade.tpOrderId || !trade.slOrderId) && trade.tpPrice != null && trade.slPrice != null && quantity != null) {
+    logger.warn({ tradeId: id }, "Scalper sync: no TP/SL order IDs — retrying placement");
+    const retryUpdates: Record<string, unknown> = {};
+    const retryErrors: string[] = [];
+
+    if (!trade.tpOrderId) {
+      try {
+        const tpOrder = await placePriceTriggeredOrder({
+          currencyPair: gateSymbol,
+          triggerPrice: fmtGatePrice(trade.tpPrice),
+          triggerRule: side === "buy" ? ">=" : "<=",
+          side: side === "buy" ? "sell" : "buy",
+          amount: fmtGateAmount(quantity),
+          orderPrice: fmtGatePrice(trade.tpPrice),
+        });
+        retryUpdates.tpOrderId = tpOrder.id.toString();
+        logger.info({ tradeId: id, tpOrderId: tpOrder.id }, "Scalper sync: TP order retry succeeded");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        retryErrors.push(`TP retry: ${msg}`);
+        logger.warn({ tradeId: id, err: msg }, "Scalper sync: TP retry failed");
+      }
+    }
+
+    if (!trade.slOrderId) {
+      try {
+        const slOrder = await placePriceTriggeredOrder({
+          currencyPair: gateSymbol,
+          triggerPrice: fmtGatePrice(trade.slPrice),
+          triggerRule: side === "buy" ? "<=" : ">=",
+          side: side === "buy" ? "sell" : "buy",
+          amount: fmtGateAmount(quantity),
+          orderPrice: "0",
+          orderType: "market",
+        });
+        retryUpdates.slOrderId = slOrder.id.toString();
+        logger.info({ tradeId: id, slOrderId: slOrder.id }, "Scalper sync: SL order retry succeeded");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        retryErrors.push(`SL retry: ${msg}`);
+        logger.warn({ tradeId: id, err: msg }, "Scalper sync: SL retry failed");
+      }
+    }
+
+    if (Object.keys(retryUpdates).length > 0) {
+      await db.update(scalperTradesTable).set(retryUpdates).where(eq(scalperTradesTable.id, id));
+    }
+    if (retryErrors.length > 0) {
+      await db.update(scalperTradesTable).set({ errorMessage: retryErrors.join(" | ") }).where(eq(scalperTradesTable.id, id));
+    }
+  }
+
   // ── Price-based fallback ──────────────────────────────────────────────────
   // Runs when:
-  //   (a) No TP/SL order IDs were ever stored (placement failed at entry), OR
+  //   (a) No TP/SL order IDs were ever stored (placement failed at entry AND retry also failed), OR
   //   (b) All checked orders reached terminal non-fill states (cancelled/expired/failed/unfilled limit)
-  // In case (b) the position is still open on Gate.io — this is the safety net that catches it.
+  // IMPORTANT: for live trades this ALSO places a real market exit on Gate.io before closing the DB.
   const shouldFallback =
     (orderChecks.length === 0 || allOrdersTerminal) &&
     trade.tpPrice != null && trade.slPrice != null;
@@ -184,30 +239,59 @@ async function syncScalperTrade(trade: typeof scalperTradesTable.$inferSelect): 
       const closeReason: "tp" | "sl" | null = tpHit ? "tp" : slHit ? "sl" : null;
 
       if (closeReason) {
-        const closePrice = closeReason === "tp" ? trade.tpPrice! : trade.slPrice!;
+        let actualClosePrice = closeReason === "tp" ? trade.tpPrice! : trade.slPrice!;
+
+        // Cancel any surviving TP/SL orders to avoid dangling fills
+        for (const oid of [trade.tpOrderId, trade.slOrderId].filter(Boolean) as string[]) {
+          try { await cancelPriceTriggeredOrder(parseInt(oid), gateSymbol); } catch { /* already gone */ }
+        }
+
+        // Place a real market exit on Gate.io — the DB record alone closing is not enough
+        if (quantity != null && quantity > 0) {
+          const exitSide = side === "buy" ? "sell" : "buy";
+          try {
+            let exitAmount: string;
+            if (exitSide === "sell") {
+              exitAmount = fmtGateAmount(quantity);
+            } else {
+              exitAmount = fmtGateAmount(quantity * livePrice / livePrice); // buy-back: base qty
+            }
+            const exitOrder = await placeSpotOrder({
+              currencyPair: gateSymbol,
+              side: exitSide,
+              amount: exitAmount,
+              type: "market",
+            });
+            actualClosePrice = parseFloat(exitOrder.avg_deal_price || livePrice.toString());
+            logger.info({ tradeId: id, exitSide, actualClosePrice, closeReason }, "Scalper: fallback market exit placed on Gate.io");
+          } catch (exitErr) {
+            logger.error({ tradeId: id, exitErr }, "Scalper: fallback market exit FAILED — position may still be open on Gate.io");
+          }
+        }
+
         const pnl =
           entryPrice != null && quantity != null
-            ? (side === "buy" ? closePrice - entryPrice : entryPrice - closePrice) * quantity
+            ? (side === "buy" ? actualClosePrice - entryPrice : entryPrice - actualClosePrice) * quantity
             : null;
 
         await db.update(scalperTradesTable).set({
           status: "closed",
           livePrice,
-          closePrice,
+          closePrice: actualClosePrice,
           closeReason,
           pnl: pnl != null ? parseFloat(pnl.toFixed(4)) : null,
           closedAt: new Date(),
         }).where(eq(scalperTradesTable.id, id));
 
         logger.warn(
-          { tradeId: id, closeReason, closePrice, allOrdersTerminal },
-          "Scalper: live trade force-closed via price fallback"
+          { tradeId: id, closeReason, closePrice: actualClosePrice, allOrdersTerminal },
+          "Scalper: live trade closed via price fallback"
         );
         if (pnl != null) await updateScalperCompoundBalance(pnl);
         return;
       }
 
-      // Trade still within TP/SL range — update live P&L
+      // Trade still within TP/SL range — update live P&L only
       const pnl =
         entryPrice != null && quantity != null
           ? (side === "buy" ? livePrice - entryPrice : entryPrice - livePrice) * quantity
