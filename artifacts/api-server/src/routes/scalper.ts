@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, scalperConfigTable, scalperTradesTable } from "@workspace/db";
 import { eq, desc, count, inArray } from "drizzle-orm";
-import { getUsdtBalance, getLivePrice, placeSpotOrder, cancelPriceTriggeredOrder } from "../services/gateio";
+import { getUsdtBalance, getLivePrice, placeSpotOrder, cancelPriceTriggeredOrder, getApiKeyDetail } from "../services/gateio";
 import { scalperLastSyncAt } from "../services/scalper-sync";
 import { scalperLoopLastRunAt, scalperLoopLastSignalCount, runScalperScan } from "../services/scalper-loop";
 import { getTopUsdtSymbols, fetchCandles, computeBB, computeRSI, computeVolumeRatio } from "../services/scalper-signals";
@@ -51,6 +51,22 @@ router.put("/config", async (req, res): Promise<void> => {
   }
   req.log.info({ enabled: config.enabled, paperMode: config.paperMode }, "Scalper config updated");
   res.json(config);
+});
+
+// ── Gate.io API key allowlist (read from Gate.io directly) ───────────────────
+
+router.get("/gateio-allowlist", async (req, res): Promise<void> => {
+  try {
+    const detail = await getApiKeyDetail();
+    res.json({ pairs: detail.currency_pairs ?? [], unrestricted: (detail.currency_pairs ?? []).length === 0 });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("account permission")) {
+      res.status(403).json({ error: "API key missing Account (Read Only) permission — enable it on Gate.io" });
+    } else {
+      res.status(500).json({ error: msg });
+    }
+  }
 });
 
 // ── Status ────────────────────────────────────────────────────────────────────

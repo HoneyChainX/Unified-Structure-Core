@@ -56,6 +56,16 @@ async function request<T>(
   return JSON.parse(text) as T;
 }
 
+export interface ApiKeyDetail {
+  user_id: number;
+  ip_whitelist: string[];
+  currency_pairs: string[];  // trading pair allowlist (empty = no restriction)
+}
+
+export async function getApiKeyDetail(): Promise<ApiKeyDetail> {
+  return request<ApiKeyDetail>("GET", "/account/detail");
+}
+
 export interface SpotAccount {
   currency: string;
   available: string;

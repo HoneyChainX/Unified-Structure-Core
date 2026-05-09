@@ -20,6 +20,43 @@ async function api<T>(path: string, opts?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+function SyncAllowlistButton({ onSync }: { onSync: (pairs: string[]) => void }) {
+  const [state, setState] = useState<"idle" | "loading" | "ok" | "err">("idle");
+  const [msg, setMsg] = useState("");
+
+  async function sync() {
+    setState("loading");
+    setMsg("");
+    try {
+      const data = await api<{ pairs: string[]; unrestricted: boolean; error?: string }>("/api/scalper/gateio-allowlist");
+      if (data.error) throw new Error(data.error);
+      onSync(data.pairs);
+      setMsg(data.unrestricted ? "No restrictions — all pairs allowed" : `${data.pairs.length} pairs synced`);
+      setState("ok");
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Failed");
+      setState("err");
+    }
+    setTimeout(() => setState("idle"), 4000);
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      {msg && (
+        <span className={`text-xs font-mono ${state === "ok" ? "text-green-400" : "text-red-400"}`}>{msg}</span>
+      )}
+      <button
+        onClick={sync}
+        disabled={state === "loading"}
+        className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono border border-orange-500/50 bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 transition-colors disabled:opacity-50"
+      >
+        <RefreshCw className={`w-3 h-3 ${state === "loading" ? "animate-spin" : ""}`} />
+        SYNC FROM GATE.IO
+      </button>
+    </div>
+  );
+}
+
 interface ScalperConfig {
   id: number;
   enabled: boolean;
@@ -686,9 +723,12 @@ export function ScalperPage() {
 
           {/* Trading Allowlist */}
           <div className="space-y-2">
-            <label className="text-xs text-muted-foreground tracking-widest flex items-center gap-2">
-              <span className="text-orange-400">▣</span> API TRADING ALLOWLIST
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="text-xs text-muted-foreground tracking-widest flex items-center gap-2">
+                <span className="text-orange-400">▣</span> API TRADING ALLOWLIST
+              </label>
+              <SyncAllowlistButton onSync={(pairs) => set("symbolAllowlist", pairs.length > 0 ? pairs.join(", ") : null)} />
+            </div>
             <textarea
               rows={3}
               placeholder={"BTC_USDT, ETH_USDT, SOL_USDT\n(leave blank = trade any scanned pair)"}
