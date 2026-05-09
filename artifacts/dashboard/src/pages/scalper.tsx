@@ -181,6 +181,25 @@ interface ScalperTrade {
   closedAt: string | null;
 }
 
+interface StrategyStats {
+  strategy: string;
+  count: number;
+  wins: number;
+  losses: number;
+  winRate: number | null;
+  totalPnl: number;
+  avgPnl: number | null;
+}
+
+interface BestModeNow {
+  strategy: string;
+  score: number;
+  winRate: number | null;
+  tradeCount: number;
+  liveSignals: number;
+  totalScanned: number;
+}
+
 interface ScalperPerformance {
   totalClosed: number;
   withPnl: number;
@@ -191,6 +210,8 @@ interface ScalperPerformance {
   avgPnl: number | null;
   bestPnl: number | null;
   worstPnl: number | null;
+  strategyStats: StrategyStats[];
+  bestModeNow: BestModeNow | null;
 }
 
 interface LiveScanEntry {
@@ -608,6 +629,74 @@ export function ScalperPage() {
               </div>
             ))}
           </div>
+
+          {/* ── Strategy breakdown ── */}
+          {perf.strategyStats && perf.strategyStats.length > 0 && (
+            <div className="border-t border-border/40 pt-3 space-y-2">
+              <div className="text-xs text-muted-foreground tracking-widest font-bold">BY STRATEGY</div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                {(["bb_rsi", "smc_mss", "cht"] as const).map((strat) => {
+                  const s = perf.strategyStats.find((x) => x.strategy === strat);
+                  const label = strat === "bb_rsi" ? "BB+RSI" : strat === "smc_mss" ? "SMC MSS" : "CHT ENGINE";
+                  const color = strat === "bb_rsi" ? "text-cyan-400 border-cyan-500/30" : strat === "smc_mss" ? "text-violet-400 border-violet-500/30" : "text-amber-400 border-amber-500/30";
+                  const isBest = perf.bestModeNow?.strategy === strat && (s?.count ?? 0) > 0;
+                  return (
+                    <div key={strat} className={`border bg-secondary/20 px-3 py-2 relative ${isBest ? "border-yellow-500/50 bg-yellow-500/5" : "border-border/50"}`}>
+                      {isBest && <span className="absolute top-1.5 right-2 text-yellow-400 text-xs">★</span>}
+                      <div className={`text-xs font-bold tracking-wider ${color}`}>{label}</div>
+                      {s ? (
+                        <>
+                          <div className={`text-base font-bold font-mono mt-0.5 ${s.winRate != null && s.winRate >= 50 ? "text-green-400" : s.winRate != null ? "text-red-400" : ""}`}>
+                            {s.winRate != null ? `${s.winRate.toFixed(1)}%` : "—"}
+                          </div>
+                          <div className="text-xs text-muted-foreground">{s.wins}W / {s.losses}L · {s.count} trades</div>
+                          <div className={`text-xs font-mono mt-0.5 ${s.totalPnl >= 0 ? "text-green-400/80" : "text-red-400/80"}`}>
+                            {s.totalPnl >= 0 ? "+" : ""}{s.totalPnl.toFixed(4)} USDT
+                          </div>
+                        </>
+                      ) : (
+                        <div className="text-xs text-muted-foreground/50 mt-1">No closed trades yet</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ── Best mode now ── */}
+          {perf.bestModeNow && (() => {
+            const b = perf.bestModeNow;
+            const label = b.strategy === "bb_rsi" ? "BB+RSI" : b.strategy === "smc_mss" ? "SMC MSS+OB" : "CHT ENGINE";
+            const color = b.strategy === "bb_rsi" ? "text-cyan-300 border-cyan-500/50 bg-cyan-500/10" : b.strategy === "smc_mss" ? "text-violet-300 border-violet-500/50 bg-violet-500/10" : "text-amber-300 border-amber-500/50 bg-amber-500/10";
+            return (
+              <div className="border-t border-border/40 pt-3">
+                <div className="text-xs text-muted-foreground tracking-widest font-bold mb-2">BEST MODE NOW</div>
+                <div className={`border px-3 py-2.5 flex items-center justify-between flex-wrap gap-2 ${color}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-yellow-400 text-sm">★</span>
+                    <span className="font-bold tracking-wider text-sm">{label}</span>
+                    <span className="text-xs opacity-70">recommended</span>
+                  </div>
+                  <div className="flex items-center gap-4 text-xs font-mono">
+                    {b.winRate != null && (
+                      <span className={b.winRate >= 50 ? "text-green-400" : "text-red-400"}>
+                        {b.winRate.toFixed(1)}% win rate ({b.tradeCount} trades)
+                      </span>
+                    )}
+                    {b.totalScanned > 0 && (
+                      <span className="text-yellow-400/80">
+                        {b.liveSignals}/{b.totalScanned} live signals
+                      </span>
+                    )}
+                    {b.winRate == null && b.totalScanned === 0 && (
+                      <span className="opacity-50">no data yet — run a scan first</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {equityCurve.length > 1 && (
             <div className="h-32 mt-2">

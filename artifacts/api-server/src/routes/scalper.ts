@@ -217,6 +217,55 @@ router.get("/performance", async (req, res): Promise<void> => {
   const totalPnl = withPnl.reduce((s, t) => s + (t.pnl ?? 0), 0);
   const pnls = withPnl.map((t) => t.pnl ?? 0);
 
+  // ── Per-strategy breakdown ─────────────────────────────────────────────────
+  type StratDim = { count: number; wins: number; totalPnl: number };
+  const byStrategy: Record<string, StratDim> = {};
+  for (const t of withPnl) {
+    const key = t.strategy ?? "bb_rsi";
+    if (!byStrategy[key]) byStrategy[key] = { count: 0, wins: 0, totalPnl: 0 };
+    byStrategy[key].count++;
+    byStrategy[key].totalPnl += t.pnl ?? 0;
+    if ((t.pnl ?? 0) > 0) byStrategy[key].wins++;
+  }
+  const strategyStats = Object.entries(byStrategy).map(([strategy, d]) => ({
+    strategy,
+    count: d.count,
+    wins: d.wins,
+    losses: d.count - d.wins,
+    winRate: d.count > 0 ? parseFloat(((d.wins / d.count) * 100).toFixed(1)) : null,
+    totalPnl: parseFloat(d.totalPnl.toFixed(4)),
+    avgPnl: d.count > 0 ? parseFloat((d.totalPnl / d.count).toFixed(4)) : null,
+  })).sort((a, b) => (b.winRate ?? -Infinity) - (a.winRate ?? -Infinity));
+
+  // ── Best mode now: combine historical win rate + live signal detection rate ──
+  const live = scalperLiveScanResults;
+  const totalScanned = live.length;
+  const liveHits = {
+    bb_rsi:  live.filter((r) => r.bbRsi.detected).length,
+    smc_mss: live.filter((r) => r.smc.detected).length,
+    cht:     live.filter((r) => r.cht.detected).length,
+  };
+
+  const ALL_STRATEGIES = ["bb_rsi", "smc_mss", "cht"] as const;
+  const bestModeScores = ALL_STRATEGIES.map((strat) => {
+    const hist = byStrategy[strat];
+    const histWr = hist ? hist.wins / hist.count : 0;         // 0–1
+    const liveRate = totalScanned > 0 ? liveHits[strat] / totalScanned : 0; // 0–1
+    // Score: 60% historical, 40% live (if no history, 100% live)
+    const hasHistory = (hist?.count ?? 0) > 0;
+    const score = hasHistory ? histWr * 0.6 + liveRate * 0.4 : liveRate;
+    return {
+      strategy: strat,
+      score: parseFloat(score.toFixed(4)),
+      winRate: hist ? parseFloat(((hist.wins / hist.count) * 100).toFixed(1)) : null,
+      tradeCount: hist?.count ?? 0,
+      liveSignals: liveHits[strat],
+      totalScanned,
+    };
+  }).sort((a, b) => b.score - a.score);
+
+  const bestModeNow = bestModeScores[0]?.score > 0 ? bestModeScores[0] : null;
+
   res.json({
     totalClosed: closed.length,
     withPnl: withPnl.length,
@@ -227,6 +276,8 @@ router.get("/performance", async (req, res): Promise<void> => {
     avgPnl: withPnl.length > 0 ? parseFloat((totalPnl / withPnl.length).toFixed(4)) : null,
     bestPnl: pnls.length > 0 ? parseFloat(Math.max(...pnls).toFixed(4)) : null,
     worstPnl: pnls.length > 0 ? parseFloat(Math.min(...pnls).toFixed(4)) : null,
+    strategyStats,
+    bestModeNow,
   });
 });
 
