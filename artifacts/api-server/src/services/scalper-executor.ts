@@ -5,8 +5,8 @@
  *   3. In paper mode: records the trade at live price
  *   4. In live mode: places a market entry + TP limit + SL stop-limit on Gate.io
  *
- * TP is set to achieve `targetProfitUsdt` on the full position.
- * SL is set `slPct`% against the entry.
+ * CHT strategy: places 3 TP orders (30%/30%/40%) + 1 SL (100%).
+ *   Break-even (SL→entry after TP1) is managed by the scalper-sync loop.
  */
 
 import { db, scalperConfigTable, scalperTradesTable } from "@workspace/db";
@@ -54,7 +54,7 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     return `Max open trades reached (${openCount}/${config.maxOpenTrades})`;
   }
 
-  // ── Duplicate symbol guard (skipped for forced manual entries) ───────────
+  // ── Duplicate symbol guard ───────────────────────────────────────────────
   if (!force) {
     const [existing] = await db
       .select({ id: scalperTradesTable.id })
@@ -73,7 +73,7 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     }
   }
 
-  // ── Cooldown guard (skipped for forced manual entries) ───────────────────
+  // ── Cooldown guard ───────────────────────────────────────────────────────
   if (!force && config.cooldownMinutes > 0) {
     const cutoff = new Date(Date.now() - config.cooldownMinutes * 60_000);
     const [recent] = await db
@@ -89,27 +89,23 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
 
     if (recent) {
       logger.info({ symbol: signal.gateSymbol, cooldownMinutes: config.cooldownMinutes }, "Scalper: cooldown active");
-      return `Cooldown active for ${signal.gateSymbol} — wait ${config.cooldownMinutes} min between trades (or use force)`;
+      return `Cooldown active for ${signal.gateSymbol} — wait ${config.cooldownMinutes} min between trades`;
     }
   }
 
   // ── Trading allowlist guard ──────────────────────────────────────────────
-  // Note: scanning uses public endpoints (no auth), so any coin can be scanned.
-  // This guard only blocks ORDER PLACEMENT for symbols not in the API key allowlist.
-  // Force (manual entry) bypasses this guard intentionally.
   if (!force && config.symbolAllowlist) {
     const allowed = config.symbolAllowlist
       .split(",")
       .map((s) => s.trim().toUpperCase())
       .filter(Boolean);
     if (allowed.length > 0 && !allowed.includes(signal.gateSymbol.toUpperCase())) {
-      logger.info({ symbol: signal.gateSymbol, allowed }, "Scalper: symbol not in trading allowlist, skipping trade");
-      return `${signal.gateSymbol} not in your API trading allowlist — add it or use manual entry to override`;
+      logger.info({ symbol: signal.gateSymbol, allowed }, "Scalper: symbol not in trading allowlist");
+      return `${signal.gateSymbol} not in your trading allowlist`;
     }
   }
 
   // ── Position sizing ──────────────────────────────────────────────────────
-  // Priority: % of live balance > compounding balance > fixed USDT
   let positionSize: number;
   if (config.positionSizePct != null && config.positionSizePct > 0) {
     try {
@@ -117,7 +113,7 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       positionSize = liveBalance * (config.positionSizePct / 100);
       logger.debug({ liveBalance, positionSizePct: config.positionSizePct, positionSize }, "Scalper: % position sizing");
     } catch {
-      positionSize = config.positionSizeUsdt; // fallback if balance fetch fails
+      positionSize = config.positionSizeUsdt;
     }
   } else if (config.compoundingEnabled && config.compoundBalance != null) {
     positionSize = config.compoundBalance;
@@ -126,17 +122,16 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
   }
 
   const entryPrice = signal.entryPrice;
-  const quantity = positionSize / entryPrice;
+  const quantity   = positionSize / entryPrice;
 
-  /** Compute TP/SL from a given fill price, honouring signal geometry (SMC) first, then config. */
+  const isCht = signal.strategy === "cht" && signal.tp1Price != null && signal.tp2Price != null && signal.tp3Price != null;
+
+  /** Compute TP/SL from a given fill price, honouring signal geometry first, then config. */
   function computeTpSl(fillPrice: number, fillQty: number): { tp: number; sl: number } {
     let tp: number;
     if (config.dynamicTp) {
-      // AUTO BB — user explicitly chose this mode; overrides all signal geometry
-      // LONG → target upper band; SHORT → target lower band. Works for both BB+RSI and SMC.
       tp = signal.side === "buy" ? signal.bbUpper : signal.bbLower;
     } else if (signal.tpPrice != null) {
-      // SMC: absolute Fib level — does not depend on fill price
       tp = signal.tpPrice;
     } else if (config.targetProfitPct != null && config.targetProfitPct > 0) {
       const move = fillPrice * (config.targetProfitPct / 100);
@@ -148,7 +143,6 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
 
     let sl: number;
     if (signal.slPrice != null) {
-      // SMC: absolute OB-edge level
       sl = signal.slPrice;
     } else {
       const move = fillPrice * (config.slPct / 100);
@@ -158,22 +152,27 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     return { tp, sl };
   }
 
-  // Provisional TP/SL at signal entry price (used for the pending DB row only)
   const provisional = computeTpSl(entryPrice, quantity);
 
+  // Common fields stored on every trade row
   const sharedFields = {
-    symbol: signal.symbol,
-    gateSymbol: signal.gateSymbol,
-    side: signal.side,
+    symbol:         signal.symbol,
+    gateSymbol:     signal.gateSymbol,
+    side:           signal.side,
     positionSizeUsdt: parseFloat(positionSize.toFixed(4)),
-    slPrice: parseFloat(provisional.sl.toFixed(8)),
-    tpPrice: parseFloat(provisional.tp.toFixed(8)),
-    bbUpper: signal.bbUpper,
-    bbLower: signal.bbLower,
-    bbMid: signal.bbMid,
-    rsi: signal.rsi,
-    volumeRatio: signal.volumeRatio,
-    paperMode: config.paperMode,
+    slPrice:        parseFloat(provisional.sl.toFixed(8)),
+    tpPrice:        parseFloat(provisional.tp.toFixed(8)),
+    bbUpper:        signal.bbUpper,
+    bbLower:        signal.bbLower,
+    bbMid:          signal.bbMid,
+    rsi:            signal.rsi,
+    volumeRatio:    signal.volumeRatio,
+    paperMode:      config.paperMode,
+    strategy:       signal.strategy ?? null,
+    // CHT multi-TP prices (null for other strategies)
+    tp1Price:       isCht ? parseFloat(signal.tp1Price!.toFixed(8)) : undefined,
+    tp2Price:       isCht ? parseFloat(signal.tp2Price!.toFixed(8)) : undefined,
+    tp3Price:       isCht ? parseFloat(signal.tp3Price!.toFixed(8)) : undefined,
   };
 
   const [trade] = await db.insert(scalperTradesTable).values({
@@ -181,6 +180,7 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     status: "pending",
   }).returning();
 
+  // ── Paper trade ──────────────────────────────────────────────────────────
   if (config.paperMode) {
     let livePrice = entryPrice;
     try {
@@ -190,22 +190,41 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     }
 
     const qty = positionSize / livePrice;
-    // Recompute TP/SL at actual live fill price so the sync loop checks the right levels
     const { tp: paperTp, sl: paperSl } = computeTpSl(livePrice, qty);
 
+    // For CHT, recalculate the 3-TP prices at actual fill price
+    let chtPaperTps: { tp1Price?: number; tp2Price?: number; tp3Price?: number } = {};
+    if (isCht && signal.slPrice != null) {
+      const slDist = Math.abs(livePrice - signal.slPrice);
+      if (slDist > 0) {
+        const dir = signal.side === "buy" ? 1 : -1;
+        chtPaperTps = {
+          tp1Price: parseFloat((livePrice + dir * 1.0 * slDist).toFixed(8)),
+          tp2Price: parseFloat((livePrice + dir * 1.5 * slDist).toFixed(8)),
+          tp3Price: parseFloat((livePrice + dir * 2.0 * slDist).toFixed(8)),
+        };
+      }
+    }
+
     await db.update(scalperTradesTable).set({
-      status: "paper",
+      status:     "paper",
       entryPrice: livePrice,
       livePrice,
-      quantity: parseFloat(qty.toFixed(8)),
-      tpPrice: parseFloat(paperTp.toFixed(8)),
-      slPrice: parseFloat(paperSl.toFixed(8)),
+      quantity:   parseFloat(qty.toFixed(8)),
+      tpPrice:    parseFloat(paperTp.toFixed(8)),
+      slPrice:    parseFloat(paperSl.toFixed(8)),
+      ...chtPaperTps,
       pnl: 0,
     }).where(eq(scalperTradesTable.id, trade.id));
 
     logger.info(
-      { tradeId: trade.id, symbol: signal.symbol, side: signal.side, entryPrice: livePrice, positionSize, tpPrice: paperTp, slPrice: paperSl },
-      "Scalper paper trade recorded"
+      {
+        tradeId: trade.id, symbol: signal.symbol, side: signal.side,
+        entryPrice: livePrice, positionSize,
+        tpPrice: paperTp, slPrice: paperSl,
+        ...(isCht ? { tp1: chtPaperTps.tp1Price, tp2: chtPaperTps.tp2Price, tp3: chtPaperTps.tp3Price, strategy: "cht" } : {}),
+      },
+      "Scalper paper trade recorded",
     );
     return null;
   }
@@ -235,15 +254,13 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     });
 
     const filledPrice = parseFloat(entryOrder.avg_deal_price || entryOrder.price);
-    const filledQty = parseFloat(entryOrder.filled_amount || entryOrder.amount);
+    const filledQty   = parseFloat(entryOrder.filled_amount || entryOrder.amount);
 
-    // Recompute TP/SL at actual fill price — same priority order as computeTpSl.
+    // Recompute actual TP/SL at fill price
     let actualTp: number;
     if (config.dynamicTp) {
-      // AUTO BB overrides all signal geometry for both BB+RSI and SMC strategies
       actualTp = signal.side === "buy" ? signal.bbUpper : signal.bbLower;
     } else if (signal.tpPrice != null) {
-      // SMC: absolute Fib level
       actualTp = signal.tpPrice;
     } else if (config.targetProfitPct != null && config.targetProfitPct > 0) {
       const tpMove = filledPrice * (config.targetProfitPct / 100);
@@ -261,61 +278,154 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       actualSl = signal.side === "buy" ? filledPrice - slMove : filledPrice + slMove;
     }
 
-    await db.update(scalperTradesTable).set({
-      entryOrderId: entryOrder.id,
-      entryPrice: filledPrice,
-      livePrice: filledPrice,
-      quantity: filledQty,
-      tpPrice: parseFloat(actualTp.toFixed(8)),
-      slPrice: parseFloat(actualSl.toFixed(8)),
-      status: "open",
-      pnl: 0,
-    }).where(eq(scalperTradesTable.id, trade.id));
-
-    logger.info({ tradeId: trade.id, filledPrice, filledQty, tpPrice: actualTp, slPrice: actualSl }, "Scalper: entry filled");
-
-    const orderUpdates: { tpOrderId?: string; slOrderId?: string; errorMessage?: string } = {};
-    const orderErrors: string[] = [];
-
-    // Fetch pair-specific precision once for both TP and SL orders
-    const tpFmt = await fmtForPair(signal.gateSymbol, actualTp, filledQty);
-    const slFmt = await fmtForPair(signal.gateSymbol, actualSl, filledQty);
-
-    // TP order — use precision-safe price/amount formatting for Gate.io
-    try {
-      const tpOrder = await placePriceTriggeredOrder({
-        currencyPair: signal.gateSymbol,
-        triggerPrice: tpFmt.price,
-        triggerRule: signal.side === "buy" ? ">=" : "<=",
-        side: signal.side === "buy" ? "sell" : "buy",
-        amount: tpFmt.amount,
-        orderPrice: tpFmt.price,
-      });
-      orderUpdates.tpOrderId = tpOrder.id.toString();
-      logger.info({ tradeId: trade.id, tpOrderId: tpOrder.id, triggerPrice: tpFmt.price }, "Scalper: TP order placed");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.warn({ tradeId: trade.id, err: msg }, "Scalper: failed to place TP order");
-      orderErrors.push(`TP: ${msg}`);
+    // Recalculate CHT TPs at actual fill if slPrice available
+    let cht3TpPrices: { tp1Price?: number; tp2Price?: number; tp3Price?: number } = {};
+    if (isCht && signal.slPrice != null) {
+      const slDist = Math.abs(filledPrice - signal.slPrice);
+      if (slDist > 0) {
+        const dir = signal.side === "buy" ? 1 : -1;
+        actualTp = filledPrice + dir * 1.5 * slDist;     // TP2 is primary
+        cht3TpPrices = {
+          tp1Price: parseFloat((filledPrice + dir * 1.0 * slDist).toFixed(8)),
+          tp2Price: parseFloat(actualTp.toFixed(8)),
+          tp3Price: parseFloat((filledPrice + dir * 2.0 * slDist).toFixed(8)),
+        };
+      }
     }
 
-    // SL order — market type guarantees fill even when price gaps hard through the SL level
-    try {
-      const slOrder = await placePriceTriggeredOrder({
-        currencyPair: signal.gateSymbol,
-        triggerPrice: slFmt.price,
-        triggerRule: signal.side === "buy" ? "<=" : ">=",
-        side: signal.side === "buy" ? "sell" : "buy",
-        amount: slFmt.amount,
-        orderPrice: "0",   // ignored for market put orders
-        orderType: "market",
-      });
-      orderUpdates.slOrderId = slOrder.id.toString();
-      logger.info({ tradeId: trade.id, slOrderId: slOrder.id, triggerPrice: slFmt.price }, "Scalper: SL order placed");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.warn({ tradeId: trade.id, err: msg }, "Scalper: failed to place SL order");
-      orderErrors.push(`SL: ${msg}`);
+    await db.update(scalperTradesTable).set({
+      entryOrderId: entryOrder.id,
+      entryPrice:   filledPrice,
+      livePrice:    filledPrice,
+      quantity:     filledQty,
+      tpPrice:      parseFloat(actualTp.toFixed(8)),
+      slPrice:      parseFloat(actualSl.toFixed(8)),
+      ...cht3TpPrices,
+      status: "open",
+      pnl:    0,
+    }).where(eq(scalperTradesTable.id, trade.id));
+
+    logger.info({ tradeId: trade.id, filledPrice, filledQty, tpPrice: actualTp, slPrice: actualSl, strategy: signal.strategy }, "Scalper: entry filled");
+
+    const orderUpdates: Record<string, string | undefined> = {};
+    const orderErrors: string[] = [];
+
+    // ── CHT: 3 TP orders + 1 SL covering full position ───────────────────
+    if (isCht && cht3TpPrices.tp1Price && cht3TpPrices.tp2Price && cht3TpPrices.tp3Price) {
+      const q1 = filledQty * 0.30;
+      const q2 = filledQty * 0.30;
+      const q3 = filledQty * 0.40;
+      const triggerRule = signal.side === "buy" ? ">=" : "<=";
+      const exitSide    = signal.side === "buy" ? "sell" : "buy";
+
+      const [fmt1, fmt2, fmt3, fmtSl] = await Promise.all([
+        fmtForPair(signal.gateSymbol, cht3TpPrices.tp1Price, q1),
+        fmtForPair(signal.gateSymbol, cht3TpPrices.tp2Price, q2),
+        fmtForPair(signal.gateSymbol, cht3TpPrices.tp3Price, q3),
+        fmtForPair(signal.gateSymbol, actualSl, filledQty),
+      ]);
+
+      // TP1 (1R, 30%)
+      try {
+        const o = await placePriceTriggeredOrder({
+          currencyPair: signal.gateSymbol,
+          triggerPrice: fmt1.price, triggerRule,
+          side: exitSide, amount: fmt1.amount, orderPrice: fmt1.price,
+        });
+        orderUpdates.tp1OrderId = o.id.toString();
+        logger.info({ tradeId: trade.id, tp1OrderId: o.id, price: fmt1.price }, "CHT: TP1 order placed");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        orderErrors.push(`TP1: ${msg}`);
+        logger.warn({ tradeId: trade.id, err: msg }, "CHT: TP1 order failed");
+      }
+
+      // TP2 (1.5R, 30%)
+      try {
+        const o = await placePriceTriggeredOrder({
+          currencyPair: signal.gateSymbol,
+          triggerPrice: fmt2.price, triggerRule,
+          side: exitSide, amount: fmt2.amount, orderPrice: fmt2.price,
+        });
+        orderUpdates.tp2OrderId = o.id.toString();
+        logger.info({ tradeId: trade.id, tp2OrderId: o.id, price: fmt2.price }, "CHT: TP2 order placed");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        orderErrors.push(`TP2: ${msg}`);
+        logger.warn({ tradeId: trade.id, err: msg }, "CHT: TP2 order failed");
+      }
+
+      // TP3 (2R, 40%)
+      try {
+        const o = await placePriceTriggeredOrder({
+          currencyPair: signal.gateSymbol,
+          triggerPrice: fmt3.price, triggerRule,
+          side: exitSide, amount: fmt3.amount, orderPrice: fmt3.price,
+        });
+        orderUpdates.tp3OrderId = o.id.toString();
+        logger.info({ tradeId: trade.id, tp3OrderId: o.id, price: fmt3.price }, "CHT: TP3 order placed");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        orderErrors.push(`TP3: ${msg}`);
+        logger.warn({ tradeId: trade.id, err: msg }, "CHT: TP3 order failed");
+      }
+
+      // SL — market order covering full position (protects 100% until TP1 fires, then sync replaces it)
+      const slRule = signal.side === "buy" ? "<=" : ">=";
+      try {
+        const o = await placePriceTriggeredOrder({
+          currencyPair: signal.gateSymbol,
+          triggerPrice: fmtSl.price, triggerRule: slRule,
+          side: exitSide, amount: fmtSl.amount,
+          orderPrice: "0", orderType: "market",
+        });
+        orderUpdates.slOrderId = o.id.toString();
+        logger.info({ tradeId: trade.id, slOrderId: o.id, price: fmtSl.price }, "CHT: SL order placed");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        orderErrors.push(`SL: ${msg}`);
+        logger.warn({ tradeId: trade.id, err: msg }, "CHT: SL order failed");
+      }
+
+    } else {
+      // ── Standard single TP + SL (BB+RSI / SMC) ──────────────────────────
+      const tpFmt = await fmtForPair(signal.gateSymbol, actualTp, filledQty);
+      const slFmt = await fmtForPair(signal.gateSymbol, actualSl, filledQty);
+
+      try {
+        const tpOrder = await placePriceTriggeredOrder({
+          currencyPair: signal.gateSymbol,
+          triggerPrice: tpFmt.price,
+          triggerRule:  signal.side === "buy" ? ">=" : "<=",
+          side:         signal.side === "buy" ? "sell" : "buy",
+          amount:       tpFmt.amount,
+          orderPrice:   tpFmt.price,
+        });
+        orderUpdates.tpOrderId = tpOrder.id.toString();
+        logger.info({ tradeId: trade.id, tpOrderId: tpOrder.id }, "Scalper: TP order placed");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn({ tradeId: trade.id, err: msg }, "Scalper: TP order failed");
+        orderErrors.push(`TP: ${msg}`);
+      }
+
+      try {
+        const slOrder = await placePriceTriggeredOrder({
+          currencyPair: signal.gateSymbol,
+          triggerPrice: slFmt.price,
+          triggerRule:  signal.side === "buy" ? "<=" : ">=",
+          side:         signal.side === "buy" ? "sell" : "buy",
+          amount:       slFmt.amount,
+          orderPrice:   "0",
+          orderType:    "market",
+        });
+        orderUpdates.slOrderId = slOrder.id.toString();
+        logger.info({ tradeId: trade.id, slOrderId: slOrder.id }, "Scalper: SL order placed");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn({ tradeId: trade.id, err: msg }, "Scalper: SL order failed");
+        orderErrors.push(`SL: ${msg}`);
+      }
     }
 
     if (orderErrors.length > 0) {

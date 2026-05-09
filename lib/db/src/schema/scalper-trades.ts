@@ -18,10 +18,25 @@ export const scalperTradesTable = pgTable("scalper_trades", {
 
   entryOrderId: text("entry_order_id"),
   slOrderId: text("sl_order_id"),
-  tpOrderId: text("tp_order_id"),
 
-  slPrice: real("sl_price"),
+  // Standard single-TP (BB+RSI / SMC strategies)
+  tpOrderId: text("tp_order_id"),
   tpPrice: real("tp_price"),
+  slPrice: real("sl_price"),
+
+  // CHT multi-TP (TP1=1R/30%, TP2=1.5R/30%, TP3=2R/40%)
+  tp1OrderId: text("tp1_order_id"),
+  tp2OrderId: text("tp2_order_id"),
+  tp3OrderId: text("tp3_order_id"),
+  tp1Price: real("tp1_price"),
+  tp2Price: real("tp2_price"),
+  tp3Price: real("tp3_price"),
+
+  // CHT break-even: true after TP1 fills and SL is moved to entry price
+  breakEvenActivated: boolean("break_even_activated").default(false),
+
+  // Which strategy engine generated this trade ("bb_rsi" | "smc_mss" | "cht")
+  strategy: text("strategy"),
 
   closePrice: real("close_price"),
   closeReason: text("close_reason"),

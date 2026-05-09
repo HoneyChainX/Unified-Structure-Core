@@ -48,8 +48,11 @@ export interface LiveScanEntry {
     grade: string | null;
     setupType: string | null;
     taoVotes: number | null;
-    tp: number | null;
+    tp1: number | null;
+    tp2: number | null;
+    tp3: number | null;
     sl: number | null;
+    rr: number | null;
   };
 }
 
@@ -147,14 +150,17 @@ async function runLiveDualScan(): Promise<void> {
           mssLevel: smcSignal ? smcSignal.bbMid : null,
         },
         cht: {
-          detected: chtSignal !== null,
-          side: chtSignal ? chtSignal.side : null,
-          score: chtSignal?.chtScore ?? null,
-          grade: chtSignal?.chtGrade ?? null,
+          detected:  chtSignal !== null,
+          side:      chtSignal ? chtSignal.side : null,
+          score:     chtSignal?.chtScore     ?? null,
+          grade:     chtSignal?.chtGrade     ?? null,
           setupType: chtSignal?.chtSetupType ?? null,
-          taoVotes: chtSignal?.chtTaoVotes ?? null,
-          tp: chtSignal?.tpPrice ?? null,
-          sl: chtSignal?.slPrice ?? null,
+          taoVotes:  chtSignal?.chtTaoVotes  ?? null,
+          tp1:       chtSignal?.tp1Price     ?? null,
+          tp2:       chtSignal?.tp2Price     ?? null,
+          tp3:       chtSignal?.tp3Price     ?? null,
+          sl:        chtSignal?.slPrice      ?? null,
+          rr:        chtSignal?.chtRr        ?? null,
         },
       });
     } catch (err) {

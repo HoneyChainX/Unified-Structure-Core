@@ -1,23 +1,27 @@
 /**
- * CHT Engine — Crypto Hybrid Trading Intelligence Engine
+ * CHT Engine — Crypto Hybrid Trading Intelligence Engine (v2)
  *
- * Multi-factor signal engine combining:
- *  - Trend Engine        (EMA20/EMA50 + ADX trending filter)
- *  - HTF Confirmation    (5m → 1h EMA alignment)
- *  - Market Structure    (swing high/low breakouts)
- *  - Trigger Engine      (BREAKOUT / RETEST / REVERSAL — graded 25/18/15)
- *  - Volume Engine       (volumeRatio scored VERY STRONG / GOOD / MEDIUM / WEAK)
- *  - Volatility Engine   (ATR% 0.3–8% scalp regime)
- *  - Spread Intelligence (relative return vs BTC as alt-rotation proxy)
- *  - Divergence Engine   (RSI divergence — adds confidence only)
- *  - TAO Consensus       (6 expert votes, ≥ 4 required)
- *  - Opportunity Score   (0–100, grade ELITE/STRONG/MEDIUM/IGNORE)
+ * 11-stage autonomous signal pipeline per spec:
+ *  1.  Trend Engine        — EMA20/EMA50 + ADX ≥ 18 (ranging = skip)
+ *  2.  HTF Confirmation    — 1h EMA20/EMA50 must agree with 5m direction
+ *  3.  Volatility Engine   — ATR% 0.3–8% scalp regime required
+ *  4.  Volume Engine       — volumeRatio ≥ 1.0×; WEAK = skip
+ *  5.  RSI                 — for trigger and divergence checks
+ *  6.  Market Structure    — 3-bar swing high/low detection
+ *  7.  Trigger Engine      — RETEST (25) > BREAKOUT (18) > REVERSAL (15)
+ *                           BREAKOUT body must be > 40% of candle range
+ *  8.  Correlation Engine  — corr(close, BTC, 20) < 0.9; corr(vol, ROC, 14) > 0.5
+ *  9.  Risk Engine         — TP1=1R / TP2=1.5R / TP3=2R; RR ≥ 1 required
+ * 10.  Spread Intelligence — BTC relative return + CoinGecko market context
+ * 11.  Divergence Engine   — RSI divergence (confidence boost)
+ * 12.  TAO Consensus       — 6 experts, ≥ 5 required (raised from 4 per spec §13)
+ * 13.  Opportunity Score   — 0–100; ELITE(85+)/STRONG(75+)/MEDIUM(60+)/IGNORE
  *
- * A signal is emitted ONLY when all major engines align and score ≥ 60.
- * TP = entry ± 1.5 × SL distance (TP2 / 1.5R — balanced RR)
+ * Bot trade structure: TP1=30%, TP2=30%, TP3=40%. SL moves to break-even after TP1.
  */
 
 import { Candle, ScalperSignal, computeEMA, computeRSI, computeVolumeRatio, computeBB, fetchCandles } from "./scalper-signals";
+import { getMarketStatus } from "./market";
 import { logger } from "../lib/logger";
 
 const SWING_LOOKBACK = 3;
@@ -74,8 +78,8 @@ export function computeADX(candles: Candle[], period = ADX_PERIOD): ADXResult {
     return out;
   }
 
-  const smoothTR  = rmaSmooth(trs,     period);
-  const smoothPDM = rmaSmooth(plusDMs, period);
+  const smoothTR  = rmaSmooth(trs,      period);
+  const smoothPDM = rmaSmooth(plusDMs,  period);
   const smoothMDM = rmaSmooth(minusDMs, period);
 
   const dxArr: number[] = [];
@@ -95,6 +99,22 @@ export function computeADX(candles: Candle[], period = ADX_PERIOD): ADXResult {
   const minusDI = lastATR > 0 ? 100 * smoothMDM[smoothMDM.length - 1] / lastATR : 0;
 
   return { adx, plusDI, minusDI };
+}
+
+// ── Pearson Correlation (spec §11 — correlation engine) ───────────────────────
+
+function pearsonCorr(x: number[], y: number[]): number {
+  const n = Math.min(x.length, y.length);
+  if (n < 2) return 0;
+  const xs = x.slice(-n), ys = y.slice(-n);
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, dx2 = 0, dy2 = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - mx, dy = ys[i] - my;
+    num += dx * dy; dx2 += dx * dx; dy2 += dy * dy;
+  }
+  return dx2 * dy2 === 0 ? 0 : num / Math.sqrt(dx2 * dy2);
 }
 
 // ── Swing-point detection ─────────────────────────────────────────────────────
@@ -123,23 +143,24 @@ function findSwingLows(candles: Candle[], lookback: number): { index: number; pr
   return out;
 }
 
-// ── Volume score (section 5 of spec) ─────────────────────────────────────────
+// ── Volume score ──────────────────────────────────────────────────────────────
 
 function volumeScore(volumeRatio: number): number {
-  if (volumeRatio >= 1.5) return 1.0;  // VERY STRONG
-  if (volumeRatio >= 1.2) return 0.7;  // GOOD
-  if (volumeRatio >= 1.0) return 0.4;  // MEDIUM
-  return 0.0;                          // WEAK
+  if (volumeRatio >= 1.5) return 1.0;  // EXTREME / VERY STRONG
+  if (volumeRatio >= 1.2) return 0.7;  // STRONG
+  if (volumeRatio >= 1.0) return 0.4;  // NORMAL
+  return 0.0;                          // WEAK — skip per spec
 }
 
-// ── Trigger Engine (section 4 of spec) ───────────────────────────────────────
+// ── Trigger Engine (spec §7) ──────────────────────────────────────────────────
+// BREAKOUT body must be > 40% of candle range (spec §6 VALID BREAKOUT RULES #2)
 
 type SetupType = "BREAKOUT" | "RETEST" | "REVERSAL";
 
 interface TriggerResult {
   type: SetupType;
   sl: number;
-  triggerQuality: number;  // max 25 (RETEST=25, BREAKOUT=18, REVERSAL=15)
+  triggerQuality: number;
 }
 
 function detectTrigger(
@@ -154,10 +175,15 @@ function detectTrigger(
   const last      = candles.length - 1;
   const lastClose = candles[last].close;
   const prevClose = candles[last - 1]?.close ?? lastClose;
+  const lastCandle = candles[last];
+
+  // Body ratio validation helper — spec §6: body > 40% of range for BREAKOUT
+  const body  = Math.abs(lastCandle.close - lastCandle.open);
+  const range = lastCandle.high - lastCandle.low;
+  const bodyRatioOk = range > 0 && body / range >= 0.4;
 
   if (side === "buy") {
-    // ── RETEST (highest priority per spec) ───────────────────────────────────
-    // Prior swing high was broken (breakout happened), price pulls back and rejects bullishly
+    // ── RETEST (highest priority) ─────────────────────────────────────────
     const priorHighs = swingHighs.filter(s => s.index >= last - 30 && s.index < last - 3);
     for (const ref of priorHighs.slice().reverse()) {
       let wasBroken = false;
@@ -172,17 +198,15 @@ function detectTrigger(
       }
     }
 
-    // ── BREAKOUT ─────────────────────────────────────────────────────────────
-    // Close above recent swing high with volume (section 4A)
+    // ── BREAKOUT — body must be > 40% of range ────────────────────────────
     const recentHighs = swingHighs.filter(s => s.index >= last - 40 && s.index < last - 1);
     const nearestHigh = recentHighs[recentHighs.length - 1];
-    if (nearestHigh && lastClose > nearestHigh.price && volumeRatio >= 1.2) {
+    if (nearestHigh && lastClose > nearestHigh.price && volumeRatio >= 1.2 && bodyRatioOk) {
       const sl = nearestHigh.price - atr;
       return { type: "BREAKOUT", sl, triggerQuality: 18 };
     }
 
-    // ── REVERSAL ─────────────────────────────────────────────────────────────
-    // Price at demand zone + RSI crosses above 50 (section 4C)
+    // ── REVERSAL ──────────────────────────────────────────────────────────
     const recentLows = swingLows.filter(s => s.index >= last - 30 && s.index < last - 1);
     const nearestLow = recentLows[recentLows.length - 1];
     if (nearestLow) {
@@ -194,7 +218,7 @@ function detectTrigger(
     }
 
   } else {
-    // ── RETEST (bearish) ─────────────────────────────────────────────────────
+    // ── RETEST (bearish) ──────────────────────────────────────────────────
     const priorLows = swingLows.filter(s => s.index >= last - 30 && s.index < last - 3);
     for (const ref of priorLows.slice().reverse()) {
       let wasBroken = false;
@@ -209,15 +233,15 @@ function detectTrigger(
       }
     }
 
-    // ── BREAKOUT (bearish) ───────────────────────────────────────────────────
+    // ── BREAKOUT (bearish) — body > 40% ───────────────────────────────────
     const recentLows = swingLows.filter(s => s.index >= last - 40 && s.index < last - 1);
     const nearestLow = recentLows[recentLows.length - 1];
-    if (nearestLow && lastClose < nearestLow.price && volumeRatio >= 1.2) {
+    if (nearestLow && lastClose < nearestLow.price && volumeRatio >= 1.2 && bodyRatioOk) {
       const sl = nearestLow.price + atr;
       return { type: "BREAKOUT", sl, triggerQuality: 18 };
     }
 
-    // ── REVERSAL (bearish) ───────────────────────────────────────────────────
+    // ── REVERSAL (bearish) ────────────────────────────────────────────────
     const recentHighs = swingHighs.filter(s => s.index >= last - 30 && s.index < last - 1);
     const nearestHigh = recentHighs[recentHighs.length - 1];
     if (nearestHigh) {
@@ -232,19 +256,19 @@ function detectTrigger(
   return null;
 }
 
-// ── Divergence (section 11 of spec — confidence boost only) ──────────────────
+// ── Divergence Engine (confidence boost only) ─────────────────────────────────
 
 function checkDivergence(closes: number[], side: "buy" | "sell"): boolean {
   if (closes.length < 16) return false;
   const rsiNow  = computeRSI(closes, 14);
   const rsiPrev = computeRSI(closes.slice(0, -5), 14);
   const priceDelta = closes[closes.length - 1] - closes[closes.length - 6];
-  if (side === "buy")  return priceDelta < 0 && rsiNow > rsiPrev + 1; // bullish: lower price, higher RSI
-  return priceDelta > 0 && rsiNow < rsiPrev - 1;                       // bearish: higher price, lower RSI
+  if (side === "buy")  return priceDelta < 0 && rsiNow > rsiPrev + 1;
+  return priceDelta > 0 && rsiNow < rsiPrev - 1;
 }
 
-// ── TAO Consensus Engine (section 13 of spec) ─────────────────────────────────
-// 6 expert votes — requires ≥ 4 for signal emission
+// ── TAO Consensus Engine (spec §9 / §13) ──────────────────────────────────────
+// 6 expert votes — threshold raised to ≥ 5 per spec scanning doc §13
 
 function computeTaoVotes(
   side: "buy" | "sell",
@@ -256,7 +280,7 @@ function computeTaoVotes(
 ): number {
   let v = 0;
   if (side === "buy") {
-    if (p.spreadScore > 0)           v++;  // 1. Spread Expert: alt rotation positive
+    if (p.spreadScore > 0)           v++;  // 1. Spread Expert: positive environment
     if (p.ema20 > p.ema50)           v++;  // 2. Trend Expert: EMA aligned bullish
     if (p.lastClose > p.ema50)       v++;  // 3. EMA Expert: price above EMA50
     if (p.volumeRatio >= 1.2)        v++;  // 4. Volume Expert: meaningful participation
@@ -273,7 +297,7 @@ function computeTaoVotes(
   return v;
 }
 
-// ── Opportunity Score Engine (section 14 of spec) ─────────────────────────────
+// ── Opportunity Score Engine (spec §10 / §14) ──────────────────────────────────
 // Trend=20, HTF=20, Trigger=25, Volume=10, Volatility=10, Risk=15 → max 100
 
 type CHTGrade = "ELITE" | "STRONG" | "MEDIUM" | "IGNORE";
@@ -288,11 +312,11 @@ function computeOpportunityScore(p: {
   if (p.htfOk)   score += 20;
   score += Math.min(25, Math.max(0, p.triggerQuality));
   score += Math.round(volumeScore(p.volumeRatio) * 10);
-  if      (p.atrPct > 0.3 && p.atrPct < 4.0) score += 10;
-  else if (p.atrPct >= 4.0 && p.atrPct < 8.0) score += 4; // high chaos — partial credit
-  if      (p.rr >= 2.0) score += 15;
-  else if (p.rr >= 1.2) score += 10;
-  else if (p.rr >= 1.0) score += 5;
+  if      (p.atrPct > 0.3 && p.atrPct < 4.0)  score += 10;
+  else if (p.atrPct >= 4.0 && p.atrPct < 8.0)  score +=  4; // chaotic partial credit
+  if      (p.rr >= 2.0)  score += 15;
+  else if (p.rr >= 1.5)  score += 12;
+  else if (p.rr >= 1.0)  score +=  5;
 
   const grade: CHTGrade =
     score >= 85 ? "ELITE"  :
@@ -302,98 +326,142 @@ function computeOpportunityScore(p: {
   return { score, grade };
 }
 
+// ── Market context for enhanced spread intelligence ───────────────────────────
+
+export interface CHTMarketContext {
+  btcD: number;      // BTC dominance %
+  othersD: number;   // Alt dominance % (excl BTC/ETH/stables)
+  stableD: number;   // USDT+USDC dominance %
+}
+
 // ── Public evaluator ──────────────────────────────────────────────────────────
 
 export function evaluateCHTSignal(
   gateSymbol: string,
-  ltfCandles: Candle[],    // 5m — needs 150+ for reliable swing detection
-  htfCandles: Candle[],    // 1h — needs 55+ for EMA50
-  btcCandles: Candle[],    // BTC 5m — spread intelligence proxy
-  params: { longOnly: boolean },
+  ltfCandles: Candle[],    // 5m — needs 150+ candles
+  htfCandles: Candle[],    // 1h — needs 55+ candles
+  btcCandles: Candle[],    // BTC 5m — spread + correlation reference
+  params: { longOnly: boolean; marketContext?: CHTMarketContext | null },
 ): ScalperSignal | null {
   if (ltfCandles.length < 80 || htfCandles.length < 55) return null;
 
-  const last    = ltfCandles.length - 1;
-  const closes  = ltfCandles.map(c => c.close);
-  const volumes = ltfCandles.map(c => c.volume);
+  const last      = ltfCandles.length - 1;
+  const closes    = ltfCandles.map(c => c.close);
+  const volumes   = ltfCandles.map(c => c.volume);
   const lastClose = closes[last];
 
-  // ── 1. Trend Engine (EMA20 > EMA50, ADX > 18) ────────────────────────────
+  // ── 1. Trend Engine ───────────────────────────────────────────────────────
   const ema20 = computeEMA(closes, 20);
   const ema50 = computeEMA(closes, 50);
   const { adx } = computeADX(ltfCandles, ADX_PERIOD);
-  if (adx < 18) return null;  // ranging market — spec says NO TRADE
+  if (adx < 18) return null;
 
   const bullishTrend = ema20 > ema50;
   const bearishTrend = ema20 < ema50;
 
-  // ── 2. HTF Confirmation (1h EMA alignment, spec section 2) ───────────────
+  // ── 2. HTF Confirmation (1h EMA) ──────────────────────────────────────────
   const htfCloses  = htfCandles.map(c => c.close);
   const htfEma20   = computeEMA(htfCloses, 20);
   const htfEma50   = computeEMA(htfCloses, 50);
   const htfBullish = htfEma20 > htfEma50;
   const htfBearish = htfEma20 < htfEma50;
 
-  // Determine trade direction — must have LTF + HTF agreement
   let side: "buy" | "sell";
-  if      (bullishTrend && htfBullish)                          side = "buy";
-  else if (!params.longOnly && bearishTrend && htfBearish)      side = "sell";
-  else                                                           return null;
+  if      (bullishTrend && htfBullish)                     side = "buy";
+  else if (!params.longOnly && bearishTrend && htfBearish) side = "sell";
+  else                                                     return null;
 
-  // ── 3. Volatility Engine (ATR%, spec section 6) ───────────────────────────
+  // ── 3. Volatility Engine ──────────────────────────────────────────────────
   const atr    = computeATR(ltfCandles, ATR_PERIOD);
   const atrPct = lastClose > 0 ? (atr / lastClose) * 100 : 0;
-  if (atrPct < 0.3) return null;  // too flat — no trade per spec
-  if (atrPct > 8.0) return null;  // HIGH CHAOS — skip
+  if (atrPct < 0.3) return null;
+  if (atrPct > 8.0) return null;
 
-  // ── 4. Volume Engine ─────────────────────────────────────────────────────
+  // ── 4. Volume Engine ──────────────────────────────────────────────────────
   const volumeRatio = computeVolumeRatio(volumes);
-  if (volumeScore(volumeRatio) === 0.0) return null;  // WEAK — spec says skip
+  if (volumeScore(volumeRatio) === 0.0) return null;
 
-  // ── 5. RSI ───────────────────────────────────────────────────────────────
+  // ── 5. RSI ────────────────────────────────────────────────────────────────
   const rsi = computeRSI(closes, 14);
 
-  // ── 6. Market Structure + Trigger Engine ─────────────────────────────────
+  // ── 6. Market Structure + Trigger Engine ──────────────────────────────────
   const swingHighs = findSwingHighs(ltfCandles, SWING_LOOKBACK);
   const swingLows  = findSwingLows(ltfCandles,  SWING_LOOKBACK);
   const trigger = detectTrigger(ltfCandles, side, swingHighs, swingLows, rsi, volumeRatio, atr);
   if (!trigger) return null;
 
-  // ── 7. Risk Engine — TP1/TP2/TP3, SL validation ──────────────────────────
+  // ── 7. Risk Engine — TP1=1R, TP2=1.5R, TP3=2R ────────────────────────────
   const slLevel = trigger.sl;
   const slDist  = Math.abs(lastClose - slLevel);
   if (slDist <= 0) return null;
   if (side === "buy"  && slLevel >= lastClose) return null;
   if (side === "sell" && slLevel <= lastClose) return null;
 
-  // TP2 (1.5R) as bot target — best balance of fill rate vs RR
-  const tpPrice = side === "buy"
-    ? lastClose + 1.5 * slDist
-    : lastClose - 1.5 * slDist;
-  const rr = (side === "buy" ? tpPrice - lastClose : lastClose - tpPrice) / slDist;
+  const tp1Price = side === "buy" ? lastClose + 1.0 * slDist : lastClose - 1.0 * slDist;
+  const tp2Price = side === "buy" ? lastClose + 1.5 * slDist : lastClose - 1.5 * slDist;
+  const tp3Price = side === "buy" ? lastClose + 2.0 * slDist : lastClose - 2.0 * slDist;
+  // RR measured at TP2 (primary target)
+  const rr = 1.5;
 
-  // ── 8. Spread Intelligence — alt-rotation proxy vs BTC ───────────────────
-  let spreadScore = 0;
+  // RR < 1 = ignore (spec §12 RISK ENGINE: "IGNORE if RR < 1")
+  if (rr < 1) return null;
+
+  // ── 8. Correlation Engine (spec §11) ──────────────────────────────────────
+  // Skip for BTC_USDT itself — trivially self-correlated
+  if (gateSymbol !== "BTC_USDT" && btcCandles.length >= 20 && closes.length >= 20) {
+    const btcCloses = btcCandles.map(c => c.close);
+
+    // corr(close, BTC, 20) < 0.9 — avoid over-correlated setups
+    const corrBtc = pearsonCorr(closes.slice(-20), btcCloses.slice(-20));
+    if (corrBtc >= 0.9) return null;
+
+    // corr(volume, ROC(close,1), 14) > 0.5 — volume must confirm price moves
+    if (closes.length >= 15 && volumes.length >= 14) {
+      const roc = closes.slice(-(14 + 1)).map((c, i, arr) =>
+        i === 0 ? 0 : (c - arr[i - 1]) / Math.max(arr[i - 1], 1e-12)
+      ).slice(1);
+      const corrVolPrice = pearsonCorr(volumes.slice(-14), roc);
+      if (corrVolPrice < 0.5) return null;
+    }
+  }
+
+  // ── 9. Spread Intelligence (spec §10 — three components) ──────────────────
+  //
+  // Component A (spread_x_btc): relative return vs BTC over 20 bars
+  let spreadXBtc = 0;
   if (btcCandles.length >= 21 && closes.length >= 21) {
     const btcCloses = btcCandles.map(c => c.close);
     const n = Math.min(21, btcCloses.length, closes.length);
-    const symRet = (lastClose - closes[closes.length - n]) / closes[closes.length - n];
-    const btcRet = (btcCloses[btcCloses.length - 1] - btcCloses[btcCloses.length - n]) / btcCloses[btcCloses.length - n];
-    spreadScore  = symRet - btcRet;  // positive = outperforming BTC (bullish rotation)
+    const symRet = (lastClose - closes[closes.length - n]) / Math.max(closes[closes.length - n], 1e-12);
+    const btcRet = (btcCloses[btcCloses.length - 1] - btcCloses[btcCloses.length - n]) /
+                   Math.max(btcCloses[btcCloses.length - n], 1e-12);
+    spreadXBtc = symRet - btcRet;
   }
+  // Clamp to [-1, +1]: ±5% relative return maps to ±1
+  const spreadXBtcNorm = Math.max(-1, Math.min(1, spreadXBtc * 20));
 
-  // ── 9. Divergence ────────────────────────────────────────────────────────
+  // Component B (spread_alt_rot): alts leading vs BTC (CoinGecko othersD > 30%)
+  const mCtx = params.marketContext;
+  const altRotDir  = mCtx ? (mCtx.othersD > 30 ? 1 : mCtx.othersD < 25 ? -1 : 0) : 0;
+
+  // Component C (spread_stable): low stablecoin dominance = risk-on
+  const stableDir  = mCtx ? (mCtx.stableD < 5 ? 1 : mCtx.stableD > 7 ? -1 : 0) : 0;
+
+  // SPREAD_SCORE = 0.5 * spread_x_btc + 0.3 * alt_rot + 0.2 * stable_pressure
+  const spreadScore = 0.5 * spreadXBtcNorm + 0.3 * altRotDir + 0.2 * stableDir;
+
+  // ── 10. Divergence ────────────────────────────────────────────────────────
   const hasDivergence = checkDivergence(closes, side);
 
-  // ── 10. TAO Consensus (≥ 4 of 6 experts) ─────────────────────────────────
+  // ── 11. TAO Consensus — threshold ≥ 5 (raised per spec scanning doc §13) ──
   const taoVotes = computeTaoVotes(side, {
     ema20, ema50, htfBullish, htfBearish,
     volumeRatio, hasDivergence, lastClose,
     rsi, spreadScore,
   });
-  if (taoVotes < 4) return null;
+  if (taoVotes < 5) return null;
 
-  // ── 11. Opportunity Score — only emit MEDIUM+ signals ────────────────────
+  // ── 12. Opportunity Score — only emit MEDIUM+ signals ─────────────────────
   const { score, grade } = computeOpportunityScore({
     trendOk: side === "buy" ? bullishTrend : bearishTrend,
     htfOk:   side === "buy" ? htfBullish   : htfBearish,
@@ -404,11 +472,15 @@ export function evaluateCHTSignal(
   });
   if (grade === "IGNORE") return null;
 
-  // Repurpose BB fields for context display: upper=resistance, lower=support, mid=EMA50
+  // Repurpose BB fields for context: upper=resistance, lower=support, mid=EMA50
   const bb = computeBB(closes, 20, 2.0);
 
   logger.debug(
-    { gateSymbol, side, score, grade, setupType: trigger.type, taoVotes, atrPct: atrPct.toFixed(2), adx: adx.toFixed(1) },
+    {
+      gateSymbol, side, score, grade,
+      setupType: trigger.type, taoVotes, spreadScore: spreadScore.toFixed(3),
+      atrPct: atrPct.toFixed(2), adx: adx.toFixed(1), rr,
+    },
     "CHT: signal detected",
   );
 
@@ -417,8 +489,12 @@ export function evaluateCHTSignal(
     gateSymbol,
     side,
     entryPrice:   lastClose,
-    tpPrice,
+    tpPrice:      tp2Price,    // primary TP for backward-compat / single-TP display
     slPrice:      slLevel,
+    tp1Price,                  // 1R — 30% exit + break-even trigger
+    tp2Price,                  // 1.5R — 30% exit
+    tp3Price,                  // 2R — 40% exit
+    chtRr:        rr,
     bbUpper:      bb.upper,
     bbLower:      bb.lower,
     bbMid:        ema50,
@@ -438,12 +514,23 @@ export async function scanForCHTSignals(params: {
   longOnly: boolean;
   symbols: string[];
 }): Promise<ScalperSignal[]> {
-  // BTC 5m candles fetched once for spread intelligence across all symbols
-  let btcCandles: Candle[] = [];
-  try {
-    btcCandles = await fetchCandles("BTC_USDT", "5m", 150);
-  } catch (err) {
-    logger.warn({ err }, "CHT scan: failed to fetch BTC candles — spread score will be 0 for all");
+  // Fetch BTC 5m candles and CoinGecko market context once (shared across all symbols)
+  const [btcCandlesResult, marketContextResult] = await Promise.allSettled([
+    fetchCandles("BTC_USDT", "5m", 150),
+    getMarketStatus(),
+  ]);
+
+  const btcCandles = btcCandlesResult.status === "fulfilled" ? btcCandlesResult.value : [];
+  if (btcCandlesResult.status === "rejected") {
+    logger.warn({ err: btcCandlesResult.reason }, "CHT scan: BTC candles failed — spread/corr limited");
+  }
+
+  let marketContext: CHTMarketContext | null = null;
+  if (marketContextResult.status === "fulfilled") {
+    const s = marketContextResult.value;
+    marketContext = { btcD: s.btcDominance, othersD: s.othersDominance, stableD: s.stableDominance };
+  } else {
+    logger.warn({ err: marketContextResult.reason }, "CHT scan: CoinGecko market context unavailable");
   }
 
   const results = await Promise.allSettled(
@@ -452,7 +539,7 @@ export async function scanForCHTSignals(params: {
         fetchCandles(gateSymbol, "5m", 150),
         fetchCandles(gateSymbol, "1h", 60),
       ]);
-      return evaluateCHTSignal(gateSymbol, ltf, htf, btcCandles, params);
+      return evaluateCHTSignal(gateSymbol, ltf, htf, btcCandles, { ...params, marketContext });
     }),
   );
 
