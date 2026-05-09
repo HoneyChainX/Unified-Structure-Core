@@ -361,6 +361,34 @@ export function ScalperPage() {
 
   const [forceClosing, setForceClosing] = useState<number | null>(null);
 
+  const [liveEntering, setLiveEntering] = useState<Record<string, "buy" | "sell" | null>>({});
+  const [liveEnterMsg, setLiveEnterMsg] = useState<Record<string, { msg: string; ok: boolean }>>({});
+
+  async function enterFromMonitor(gateSymbol: string, side: "buy" | "sell") {
+    setLiveEntering((p) => ({ ...p, [gateSymbol]: side }));
+    setLiveEnterMsg((p) => { const n = { ...p }; delete n[gateSymbol]; return n; });
+    try {
+      const res = await api("/api/scalper/trade/manual", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol: gateSymbol, side }),
+      });
+      const json = res as { trade?: { id: number }; blocked?: string; error?: string };
+      if (json.blocked) {
+        setLiveEnterMsg((p) => ({ ...p, [gateSymbol]: { msg: json.blocked!, ok: false } }));
+      } else if (json.error) {
+        setLiveEnterMsg((p) => ({ ...p, [gateSymbol]: { msg: json.error!, ok: false } }));
+      } else {
+        setLiveEnterMsg((p) => ({ ...p, [gateSymbol]: { msg: `#${json.trade?.id ?? "?"} opened`, ok: true } }));
+        setTimeout(() => { refetchOpen(); refetchPerf(); refetchStatus(); }, 800);
+      }
+    } catch (e) {
+      setLiveEnterMsg((p) => ({ ...p, [gateSymbol]: { msg: String(e), ok: false } }));
+    } finally {
+      setLiveEntering((p) => ({ ...p, [gateSymbol]: null }));
+    }
+  }
+
   async function forceCloseTrade(id: number) {
     if (!confirm("Force-close this live position at market price now? This places an immediate market sell order on Gate.io.")) return;
     setForceClosing(id);
@@ -645,6 +673,7 @@ export function ScalperPage() {
                   <th className="text-left px-3 py-2">VOL×</th>
                   <th className="text-left px-3 py-2 text-cyan-400">BB+RSI</th>
                   <th className="text-left px-3 py-2 text-violet-400">SMC MSS+OB</th>
+                  <th className="text-left px-3 py-2 text-yellow-400">ACTION</th>
                 </tr>
               </thead>
               <tbody>
@@ -703,6 +732,47 @@ export function ScalperPage() {
                           ) : (
                             <span className="text-muted-foreground/50">—</span>
                           )}
+                        </td>
+                        <td className="px-3 py-2.5 min-w-[130px]">
+                          {(() => {
+                            const msg = liveEnterMsg[row.gateSymbol];
+                            const entering = liveEntering[row.gateSymbol];
+                            if (msg) {
+                              return (
+                                <span className={`text-xs ${msg.ok ? "text-green-400" : "text-red-400"}`}>
+                                  {msg.ok ? "✓ " : "✗ "}{msg.msg}
+                                </span>
+                              );
+                            }
+                            const sides: Array<"buy" | "sell"> = [];
+                            if (row.bbRsi.detected && row.bbRsi.side) sides.push(row.bbRsi.side as "buy" | "sell");
+                            if (row.smc.detected && row.smc.side && !sides.includes(row.smc.side as "buy" | "sell")) sides.push(row.smc.side as "buy" | "sell");
+                            if (sides.length === 0) return <span className="text-muted-foreground/30">—</span>;
+                            return (
+                              <div className="flex flex-col gap-1">
+                                {sides.map((side) => (
+                                  <button
+                                    key={side}
+                                    disabled={entering != null}
+                                    onClick={() => enterFromMonitor(row.gateSymbol, side)}
+                                    className={`inline-flex items-center gap-1 px-2 py-0.5 border text-xs font-bold transition-opacity disabled:opacity-50 ${
+                                      side === "buy"
+                                        ? "border-green-500/70 bg-green-500/20 text-green-300 hover:bg-green-500/35"
+                                        : "border-red-500/70 bg-red-500/20 text-red-300 hover:bg-red-500/35"
+                                    }`}
+                                  >
+                                    {entering === side ? (
+                                      <span className="animate-pulse">Entering…</span>
+                                    ) : side === "buy" ? (
+                                      <><ArrowUpRight className="w-3 h-3" />ENTER LONG</>
+                                    ) : (
+                                      <><ArrowDownRight className="w-3 h-3" />ENTER SHORT</>
+                                    )}
+                                  </button>
+                                ))}
+                              </div>
+                            );
+                          })()}
                         </td>
                       </tr>
                     );
