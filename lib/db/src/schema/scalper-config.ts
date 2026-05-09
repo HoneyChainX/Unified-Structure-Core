@@ -52,6 +52,9 @@ export const scalperConfigTable = pgTable("scalper_config", {
   // Dynamic TP — when true, executor targets the opposite Bollinger Band instead of a fixed $ or % amount
   dynamicTp: boolean("dynamic_tp").notNull().default(false),
 
+  // TradingView webhook secret — auto-generated UUID on first GET /config
+  webhookSecret: text("webhook_secret"),
+
   // Strategy engine: "bb_rsi" (default BB+RSI+volume) or "smc_mss" (MSS+OB+Fib)
   strategy: text("strategy").notNull().default("bb_rsi"),
 

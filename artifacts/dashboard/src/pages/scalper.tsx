@@ -6,7 +6,7 @@ import {
 import {
   Zap, Play, Square, RefreshCw, TrendingUp, TrendingDown, DollarSign,
   AlertTriangle, CheckCircle2, Clock, BarChart3, ArrowUpRight, ArrowDownRight,
-  ChevronDown, ChevronUp, Shield, Search, LogIn,
+  ChevronDown, ChevronUp, Shield, Search, LogIn, Link2, Copy, Eye, EyeOff, RotateCcw,
 } from "lucide-react";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -137,6 +137,7 @@ interface ScalperConfig {
   compoundBalance: number | null;
   longOnly: boolean;
   dynamicTp: boolean;
+  webhookSecret: string | null;
   symbolAllowlist: string | null;
   scanPoolSize: number;
   strategy: string;
@@ -361,6 +362,24 @@ export function ScalperPage() {
   }
 
   const [forceClosing, setForceClosing] = useState<number | null>(null);
+
+  const [showWebhookSecret, setShowWebhookSecret] = useState(false);
+  const [webhookCopied, setWebhookCopied] = useState(false);
+  const [regeneratingSecret, setRegeneratingSecret] = useState(false);
+
+  async function regenerateWebhookSecret() {
+    if (!confirm("Rotate the webhook secret? The current URL will stop working immediately.")) return;
+    setRegeneratingSecret(true);
+    try {
+      await api("/api/scalper/webhook/regenerate", { method: "POST" });
+      await refetchConfig();
+      setShowWebhookSecret(true);
+    } catch (e) {
+      alert(`Failed: ${String(e)}`);
+    } finally {
+      setRegeneratingSecret(false);
+    }
+  }
 
   const [liveEntering, setLiveEntering] = useState<Record<string, "buy" | "sell" | null>>({});
   const [liveEnterMsg, setLiveEnterMsg] = useState<Record<string, { msg: string; ok: boolean }>>({});
@@ -1208,6 +1227,69 @@ export function ScalperPage() {
               Top-N USDT pairs by 24h volume are scanned for signals. Allowlist pairs are always included first, then volume fills the remaining slots up to this limit. Higher = more market coverage, slightly more API calls per 2.5-min cycle.
             </p>
           </div>
+
+          {/* TradingView Webhook */}
+          {(() => {
+            const secret = config?.webhookSecret ?? null;
+            const origin = window.location.origin;
+            const webhookUrl = `${origin}/api/scalper/webhook?secret=${secret ?? ""}`;
+            return (
+              <div className="space-y-3 border border-violet-500/30 bg-violet-500/5 p-3">
+                <label className="text-xs text-violet-400 tracking-widest flex items-center gap-2">
+                  <Link2 className="w-3 h-3" />TRADINGVIEW WEBHOOK
+                </label>
+
+                {/* URL row */}
+                <div className="space-y-1">
+                  <div className="text-xs text-muted-foreground">Alert URL (POST)</div>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 bg-secondary border border-border px-2 py-1.5 text-xs font-mono truncate text-muted-foreground">
+                      {origin}/api/scalper/webhook?secret=
+                      <span className="text-violet-300">{showWebhookSecret ? (secret ?? "—") : "••••••••••••"}</span>
+                    </code>
+                    <button
+                      onClick={async () => {
+                        if (!secret) return;
+                        await navigator.clipboard.writeText(webhookUrl);
+                        setWebhookCopied(true);
+                        setTimeout(() => setWebhookCopied(false), 2000);
+                      }}
+                      title="Copy full URL"
+                      className="shrink-0 p-2 border border-border hover:border-violet-400 transition-colors"
+                    >
+                      {webhookCopied ? <CheckCircle2 className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                    <button
+                      onClick={() => setShowWebhookSecret((v) => !v)}
+                      title={showWebhookSecret ? "Hide secret" : "Reveal secret"}
+                      className="shrink-0 p-2 border border-border hover:border-violet-400 transition-colors"
+                    >
+                      {showWebhookSecret ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                    <button
+                      onClick={regenerateWebhookSecret}
+                      disabled={regeneratingSecret}
+                      title="Rotate secret"
+                      className="shrink-0 p-2 border border-border hover:border-red-400 hover:text-red-400 transition-colors disabled:opacity-50"
+                    >
+                      <RotateCcw className={`w-3.5 h-3.5 ${regeneratingSecret ? "animate-spin" : ""}`} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Alert message template */}
+                <div className="space-y-1">
+                  <div className="text-xs text-muted-foreground">TradingView alert message — paste as-is:</div>
+                  <pre className="bg-secondary border border-border px-3 py-2 text-xs font-mono text-violet-200 select-all">{`{"symbol":"{{ticker}}","side":"{{strategy.order.action}}"}`}</pre>
+                  <div className="text-xs text-muted-foreground space-y-0.5">
+                    <div>Set alert <span className="text-violet-300 font-mono">Webhook URL</span> to the URL above, method <span className="text-violet-300 font-mono">POST</span>.</div>
+                    <div>Optional extra fields: <span className="text-violet-300 font-mono">"tp": 1.23, "sl": 0.98</span> (absolute prices) · <span className="text-violet-300 font-mono">"force": true</span> (skip duplicate/cooldown guards).</div>
+                    <div>Accepted sides: <span className="text-green-400 font-mono">buy / long</span> · <span className="text-red-400 font-mono">sell / short</span>.</div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
         {/* Advanced / Signal params — only relevant for BB+RSI strategy */}

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { randomUUID } from "node:crypto";
 import { db, scalperConfigTable, scalperTradesTable } from "@workspace/db";
 import { eq, desc, count, inArray } from "drizzle-orm";
 import { getUsdtBalance, getLivePrice, placeSpotOrder, cancelPriceTriggeredOrder, getApiKeyDetail } from "../services/gateio";
@@ -15,6 +16,13 @@ router.get("/config", async (req, res): Promise<void> => {
   let [config] = await db.select().from(scalperConfigTable).limit(1);
   if (!config) {
     [config] = await db.insert(scalperConfigTable).values({ id: 1 }).returning();
+  }
+  if (!config.webhookSecret) {
+    const secret = randomUUID().replace(/-/g, "");
+    [config] = await db.update(scalperConfigTable)
+      .set({ webhookSecret: secret })
+      .where(eq(scalperConfigTable.id, config.id))
+      .returning();
   }
   res.json(config);
 });
@@ -414,6 +422,103 @@ router.post("/scan/symbol", async (req, res): Promise<void> => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     res.status(502).json({ error: `Failed to fetch data for ${gateSymbol}: ${msg}` });
+  }
+});
+
+// ── TradingView webhook receiver ──────────────────────────────────────────────
+// Rotate secret — call from UI "Regenerate" button
+router.post("/webhook/regenerate", async (req, res): Promise<void> => {
+  const [config] = await db.select().from(scalperConfigTable).limit(1);
+  if (!config) { res.status(503).json({ error: "Scalper not configured" }); return; }
+  const secret = randomUUID().replace(/-/g, "");
+  await db.update(scalperConfigTable).set({ webhookSecret: secret }).where(eq(scalperConfigTable.id, config.id));
+  req.log.info("Scalper webhook secret rotated");
+  res.json({ ok: true, webhookSecret: secret });
+});
+
+// Receive alert from TradingView — validates secret, fetches live candles,
+// builds a ScalperSignal, and runs the executor with normal guards.
+// Payload: { symbol, side } — also accepts { ticker, action } for TV variables.
+// Optional: { tp: 1.23, sl: 0.98, force: true }
+router.post("/webhook", async (req, res): Promise<void> => {
+  const [config] = await db.select().from(scalperConfigTable).limit(1);
+  if (!config) { res.status(503).json({ error: "Scalper not configured" }); return; }
+
+  if (config.webhookSecret) {
+    const provided = (req.query["secret"] as string | undefined)
+      ?? (req.headers["x-webhook-secret"] as string | undefined);
+    if (!provided || provided !== config.webhookSecret) {
+      req.log.warn({ ip: req.ip }, "Scalper webhook: rejected — invalid secret");
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+  }
+
+  const body = req.body as Record<string, unknown>;
+  const rawSymbol = ((body["symbol"] ?? body["ticker"]) as string | undefined)?.trim().toUpperCase();
+  const rawSide   = ((body["side"]   ?? body["action"]) as string | undefined)?.trim().toLowerCase();
+  const tpPrice   = typeof body["tp"] === "number" ? (body["tp"] as number) : undefined;
+  const slPrice   = typeof body["sl"] === "number" ? (body["sl"] as number) : undefined;
+  const forceEntry = body["force"] === true;
+
+  if (!rawSymbol) { res.status(400).json({ error: "symbol (or ticker) is required" }); return; }
+
+  const side = rawSide === "buy"  || rawSide === "long"
+    ? "buy"
+    : rawSide === "sell" || rawSide === "short"
+    ? "sell"
+    : null;
+  if (!side) { res.status(400).json({ error: "side must be buy/long or sell/short" }); return; }
+
+  let gateSymbol: string;
+  if (rawSymbol.includes("_")) {
+    gateSymbol = rawSymbol.endsWith("_USDT") ? rawSymbol : `${rawSymbol}_USDT`;
+  } else if (rawSymbol.endsWith("USDT")) {
+    gateSymbol = `${rawSymbol.slice(0, -4)}_USDT`;
+  } else {
+    gateSymbol = `${rawSymbol}_USDT`;
+  }
+
+  try {
+    const candles = await fetchCandles(gateSymbol, "5m", 60);
+    const closes  = candles.map((c) => c.close);
+    const volumes = candles.map((c) => c.volume);
+
+    const bb          = computeBB(closes, config.bbPeriod ?? 20, config.bbStdDev ?? 2.0);
+    const rsi         = computeRSI(closes, config.rsiPeriod ?? 14);
+    const volumeRatio = computeVolumeRatio(volumes);
+    const lastClose   = closes[closes.length - 1];
+    const symbol      = gateSymbol.replace("_USDT", "");
+
+    const signal = {
+      symbol,
+      gateSymbol,
+      side,
+      entryPrice: lastClose,
+      bbUpper: bb.upper,
+      bbLower: bb.lower,
+      bbMid:   bb.mid,
+      rsi,
+      volumeRatio,
+      tpPrice,
+      slPrice,
+      strategy: "webhook",
+    };
+
+    req.log.info({ gateSymbol, side, lastClose, forceEntry }, "Scalper webhook: signal received");
+
+    const { executeScalperSignal } = await import("../services/scalper-executor.js");
+    const blocked = await executeScalperSignal(signal, { force: forceEntry });
+
+    if (blocked) {
+      res.json({ ok: false, blocked, gateSymbol, side, entryPrice: lastClose });
+      return;
+    }
+    res.json({ ok: true, gateSymbol, side, entryPrice: lastClose });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    req.log.error({ err: msg }, "Scalper webhook: error");
+    res.status(502).json({ error: msg });
   }
 });
 
