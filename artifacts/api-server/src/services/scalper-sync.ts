@@ -255,11 +255,16 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
   }
 
   // ── Price-based fallback: if all orders are terminal/missing ──────────────
-  const allTerminal = exitChecks.every(async ({ orderId }) => {
-    if (!orderId) return true;
-    const r = await checkFill(orderId);
-    return r == null || (r.filled === false && r.terminal);
-  });
+  // fix #6: Array.every(async fn) never awaits — predicate returns a truthy Promise,
+  // making allTerminal always true. Use Promise.all so results are real booleans.
+  const terminalResults = await Promise.all(
+    exitChecks.map(async ({ orderId }) => {
+      if (!orderId) return true;
+      const r = await checkFill(orderId);
+      return r == null || (r.filled === false && r.terminal);
+    }),
+  );
+  const allTerminal = terminalResults.every(Boolean);
 
   // Update live P&L
   try {
@@ -271,7 +276,7 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
     await db.update(scalperTradesTable)
       .set({ livePrice, pnl: pnl != null ? parseFloat(pnl.toFixed(4)) : null })
       .where(eq(scalperTradesTable.id, id));
-    void allTerminal; // suppress unused warning
+    logger.debug({ tradeId: id, allTerminal }, "CHT live: exit order terminal check");
   } catch {
     // Non-critical
   }

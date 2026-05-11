@@ -13,6 +13,8 @@ import { db, scalperConfigTable, scalperTradesTable } from "@workspace/db";
 import { eq, inArray, and, gte, count } from "drizzle-orm";
 import {
   getUsdtBalance,
+  getSpotAccounts,
+  getSpotOrder,
   getLivePrice,
   placeSpotOrder,
   placePriceTriggeredOrder,
@@ -320,6 +322,18 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     let livePrice = entryPrice;
     if (signal.side === "sell") {
       livePrice = await getLivePrice(signal.gateSymbol);
+      // fix #4: for SELL entries Gate.io requires holding the base currency, not USDT.
+      // The USDT balance check above is insufficient — verify actual base-currency balance.
+      const baseCurrency = signal.gateSymbol.split("_")[0]!;
+      const neededBaseQty = positionSize / livePrice;
+      const accounts = await getSpotAccounts().catch((err: unknown) => {
+        throw new Error(`${baseCurrency} balance check failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      const baseAcc = accounts.find((a) => a.currency === baseCurrency);
+      const baseAvail = baseAcc ? parseFloat(baseAcc.available) : 0;
+      if (baseAvail < neededBaseQty) {
+        throw new Error(`Insufficient ${baseCurrency} balance: ${baseAvail.toFixed(6)} available, ${neededBaseQty.toFixed(6)} needed for SELL entry`);
+      }
     }
 
     const orderAmount =
@@ -335,7 +349,18 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     });
 
     const filledPrice = parseFloat(entryOrder.avg_deal_price || entryOrder.price);
-    const filledQty   = parseFloat(entryOrder.filled_amount || entryOrder.amount);
+    // fix #5: for BUY market orders, filled_amount = base currency received.
+    // NEVER fall back to entryOrder.amount which is USDT spent (wrong unit for sizing TP/SL).
+    // If filled_amount is missing/zero, re-query the order — never substitute amount.
+    let filledQty = parseFloat(entryOrder.filled_amount ?? "");
+    if (!(filledQty > 0)) {
+      const freshOrder = await getSpotOrder(entryOrder.id, signal.gateSymbol);
+      filledQty = parseFloat(freshOrder.filled_amount ?? "");
+      if (!(filledQty > 0)) {
+        throw new Error(`Entry order ${entryOrder.id}: filled_amount unavailable after re-query — refusing to size TP/SL with USDT amount`);
+      }
+      logger.info({ tradeId: trade.id, orderId: entryOrder.id, filledQty }, "fix #5: re-queried entry order to obtain filled_amount");
+    }
 
     // ── Micro mode: recalculate 2-TP levels at actual fill price ─────────
     const actualSlDist = signal.slPrice != null
