@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, botConfigTable, tradesTable, signalsTable } from "@workspace/db";
 import { eq, desc, count, and, inArray, gte, sql } from "drizzle-orm";
-import { getUsdtBalance, cancelPriceTriggeredOrder, getLivePrice, toGateSymbol } from "../services/gateio";
+import { getUsdtBalance, cancelPriceTriggeredOrder, getLivePrice, toGateSymbol, placeSpotOrder, fmtForPair, getSpotAccounts } from "../services/gateio";
 import { lastSyncAt } from "../services/sync";
 import { executeSignal } from "../services/executor";
 
@@ -491,7 +491,66 @@ router.delete("/trades/:id", async (req, res): Promise<void> => {
   const [trade] = await db.select().from(tradesTable).where(eq(tradesTable.id, id));
   if (!trade) { res.status(404).json({ error: "Trade not found" }); return; }
 
-  if (!trade.paperMode) {
+  if (!trade.paperMode && trade.status === "open") {
+    // fix #1: close the actual spot position BEFORE cancelling TP/SL orders.
+    // Previously only price-triggered orders were cancelled, leaving the spot
+    // holding open on Gate.io with funds trapped.
+    const closeSide: "buy" | "sell" = trade.side === "buy" ? "sell" : "buy";
+
+    // Determine close quantity: use stored filled quantity, fall back to live balance.
+    let closeQty = trade.quantity ?? 0;
+    if (closeQty <= 0) {
+      try {
+        const baseCurrency = trade.gateSymbol.split("_")[0]!;
+        const accounts = await getSpotAccounts();
+        const acc = accounts.find((a) => a.currency === baseCurrency);
+        closeQty = acc ? parseFloat(acc.available) : 0;
+        req.log.info({ tradeId: id, baseCurrency, closeQty }, "Cancel: using live balance as close quantity (stored qty was zero)");
+      } catch (balErr) {
+        req.log.warn({ tradeId: id, balErr }, "Cancel: could not fetch base-currency balance for close");
+      }
+    }
+
+    if (closeQty > 0) {
+      // Fetch live price for fmtForPair (amount precision only; market orders ignore price).
+      let livePrice = trade.entryPrice ?? 1;
+      try { livePrice = await getLivePrice(trade.gateSymbol); } catch { /* non-fatal */ }
+
+      try {
+        const exitFmt = await fmtForPair(trade.gateSymbol, livePrice, closeQty);
+        const closeOrder = await placeSpotOrder({
+          currencyPair: trade.gateSymbol,
+          side: closeSide,
+          amount: exitFmt.amount,
+          type: "market",
+        });
+        const closePrice = parseFloat(closeOrder.avg_deal_price || closeOrder.price || "0");
+        req.log.info({ tradeId: id, closeSide, closePrice, closeQty }, "Cancel: spot position closed on Gate.io");
+
+        // fix #1: only cancel TP/SL after position is confirmed closed
+        for (const orderId of [trade.slOrderId, trade.tp1OrderId, trade.tp2OrderId, trade.tp3OrderId].filter((x): x is string => x != null)) {
+          try { await cancelPriceTriggeredOrder(parseInt(orderId), trade.gateSymbol); }
+          catch (err) { req.log.warn({ tradeId: id, orderId, err }, "Cancel: trigger order already gone or filled"); }
+        }
+      } catch (closeErr) {
+        const msg = closeErr instanceof Error ? closeErr.message : String(closeErr);
+        // fix #1: do NOT cancel SL on failure — position is still open, SL must keep guarding
+        req.log.error({ tradeId: id, err: msg }, "Cancel: market close FAILED — SL left active, aborting cancel");
+        res.status(502).json({
+          error: `Gate.io close failed: ${msg}. SL order left active to protect the open position. Use force-close or resolve manually.`,
+        });
+        return;
+      }
+    } else {
+      // No quantity to close (position already flat) — just cancel trigger orders
+      req.log.warn({ tradeId: id }, "Cancel: closeQty=0, skipping market exit, cancelling trigger orders only");
+      for (const orderId of [trade.slOrderId, trade.tp1OrderId, trade.tp2OrderId, trade.tp3OrderId].filter((x): x is string => x != null)) {
+        try { await cancelPriceTriggeredOrder(parseInt(orderId), trade.gateSymbol); }
+        catch (err) { req.log.warn({ tradeId: id, orderId, err }, "Failed to cancel order"); }
+      }
+    }
+  } else if (!trade.paperMode) {
+    // Non-open live trade (e.g. error/pending): cancel any residual trigger orders only
     for (const orderId of [trade.slOrderId, trade.tp1OrderId, trade.tp2OrderId, trade.tp3OrderId].filter((x): x is string => x != null)) {
       try { await cancelPriceTriggeredOrder(parseInt(orderId), trade.gateSymbol); }
       catch (err) { req.log.warn({ tradeId: id, orderId, err }, "Failed to cancel order"); }

@@ -6,6 +6,7 @@ import {
   getLivePrice,
   placeSpotOrder,
   placePriceTriggeredOrder,
+  fmtForPair,
   toGateSymbol,
 } from "./gateio";
 import { getMarketStatus } from "./market";
@@ -279,17 +280,22 @@ export async function executeSignal(signal: Signal): Promise<void> {
     if (signal.dir === "LONG") {
       if (config.slEnabled && signal.sl) {
         try {
+          // fix #2: SL as market-trigger — prevents gap-through on fast moves
+          // fix #3: fmtForPair respects Gate.io per-pair amount_precision / price precision
+          const slFmt = await fmtForPair(gateSymbol, signal.sl, quantity);
           const slOrder = await placePriceTriggeredOrder({
             currencyPair: gateSymbol,
-            triggerPrice: signal.sl.toFixed(8),
+            triggerPrice: slFmt.price,
             triggerRule: "<=",
             side: "sell",
-            amount: quantity.toFixed(8),
-            orderPrice: (signal.sl * 0.999).toFixed(8),
+            amount: slFmt.amount,
+            orderPrice: "0",       // fix #2: market order requires price="0"
+            orderType: "market",   // fix #2: market fill — guaranteed execution
           });
           tpOrders.slOrderId = slOrder.id.toString();
         } catch (err) {
-          logger.warn({ tradeId: trade.id, err }, "Failed to place SL order");
+          // fix #3: loud ERROR — position is now unprotected, must be visible
+          logger.error({ tradeId: trade.id, err }, "UNPROTECTED: failed to place LONG SL — trade has no stop-loss protection");
         }
       }
 
@@ -300,34 +306,43 @@ export async function executeSignal(signal: Signal): Promise<void> {
       ]) {
         if (tp.enabled && tp.price) {
           try {
+            // fix #3: fmtForPair for pair-specific TP precision
+            const tpQty = quantity * (tp.pct / 100);
+            const tpFmt = await fmtForPair(gateSymbol, tp.price, tpQty);
             const tpOrder = await placePriceTriggeredOrder({
               currencyPair: gateSymbol,
-              triggerPrice: tp.price.toFixed(8),
+              triggerPrice: tpFmt.price,
               triggerRule: ">=",
               side: "sell",
-              amount: (quantity * (tp.pct / 100)).toFixed(8),
-              orderPrice: tp.price.toFixed(8),
+              amount: tpFmt.amount,
+              orderPrice: tpFmt.price,
             });
             tpOrders[tp.key] = tpOrder.id.toString();
           } catch (err) {
-            logger.warn({ tradeId: trade.id, err }, `Failed to place ${tp.key}`);
+            // fix #3: loud ERROR — TP failure means no profit-take order active
+            logger.error({ tradeId: trade.id, err }, `UNPROTECTED: failed to place LONG ${tp.key}`);
           }
         }
       }
     } else {
       if (config.slEnabled && signal.sl) {
         try {
+          // fix #2: SL as market-trigger — prevents gap-through on fast moves
+          // fix #3: fmtForPair respects Gate.io per-pair precision
+          const slFmt = await fmtForPair(gateSymbol, signal.sl, quantity);
           const slOrder = await placePriceTriggeredOrder({
             currencyPair: gateSymbol,
-            triggerPrice: signal.sl.toFixed(8),
+            triggerPrice: slFmt.price,
             triggerRule: ">=",
             side: "buy",
-            amount: quantity.toFixed(8),
-            orderPrice: (signal.sl * 1.001).toFixed(8),
+            amount: slFmt.amount,
+            orderPrice: "0",       // fix #2: market order requires price="0"
+            orderType: "market",   // fix #2: market fill — guaranteed execution
           });
           tpOrders.slOrderId = slOrder.id.toString();
         } catch (err) {
-          logger.warn({ tradeId: trade.id, err }, "Failed to place SHORT SL");
+          // fix #3: loud ERROR — position is now unprotected
+          logger.error({ tradeId: trade.id, err }, "UNPROTECTED: failed to place SHORT SL — trade has no stop-loss protection");
         }
       }
 
@@ -338,17 +353,21 @@ export async function executeSignal(signal: Signal): Promise<void> {
       ]) {
         if (tp.enabled && tp.price) {
           try {
+            // fix #3: fmtForPair for pair-specific SHORT TP precision
+            const tpQty = quantity * (tp.pct / 100);
+            const tpFmt = await fmtForPair(gateSymbol, tp.price, tpQty);
             const tpOrder = await placePriceTriggeredOrder({
               currencyPair: gateSymbol,
-              triggerPrice: tp.price.toFixed(8),
+              triggerPrice: tpFmt.price,
               triggerRule: "<=",
               side: "buy",
-              amount: (quantity * (tp.pct / 100)).toFixed(8),
-              orderPrice: tp.price.toFixed(8),
+              amount: tpFmt.amount,
+              orderPrice: tpFmt.price,
             });
             tpOrders[tp.key] = tpOrder.id.toString();
           } catch (err) {
-            logger.warn({ tradeId: trade.id, err }, `Failed to place SHORT ${tp.key}`);
+            // fix #3: loud ERROR — TP failure means no profit-take order active
+            logger.error({ tradeId: trade.id, err }, `UNPROTECTED: failed to place SHORT ${tp.key}`);
           }
         }
       }
