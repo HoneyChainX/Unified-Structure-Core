@@ -43,25 +43,9 @@ async function updateScalperCompoundBalance(pnl: number): Promise<void> {
   }
 }
 
-// ── CHT P&L helper ────────────────────────────────────────────────────────────
-// Accounts for the 30% partial exit at TP1 if break-even was already activated.
-
-function computeChtPnl(
-  trade: typeof scalperTradesTable.$inferSelect,
-  closePrice: number,
-): number | null {
-  const { entryPrice, quantity, side, breakEvenActivated, tp1Price } = trade;
-  if (entryPrice == null || quantity == null) return null;
-  const dir = side === "buy" ? 1 : -1;
-  if (breakEvenActivated && tp1Price != null) {
-    // 30% exited at TP1, remaining 70% at closePrice
-    return (
-      (tp1Price - entryPrice) * dir * quantity * 0.30 +
-      (closePrice - entryPrice) * dir * quantity * 0.70
-    );
-  }
-  return (closePrice - entryPrice) * dir * quantity;
-}
+// A1: per-fill P&L + TP3 force-close + SL→BE
+// P&L is accumulated incrementally via realizedPnl on each partial exit.
+// computeChtPnl removed — each exit now computes its own increment directly.
 
 // ── CHT paper trade sync ──────────────────────────────────────────────────────
 
@@ -71,56 +55,104 @@ async function syncChtPaperTrade(
 ): Promise<void> {
   const { id, side, entryPrice, quantity } = trade;
 
-  // Step 1: check TP1 for break-even activation (if not yet done)
+  // A1: per-fill P&L + TP3 force-close + SL→BE
+  const qty = quantity ?? 0;
+  const dir = side === "buy" ? 1 : -1;
+
+  // Step 1: TP1 → break-even + record 30% partial P&L
   if (!trade.breakEvenActivated && trade.tp1Price != null && entryPrice != null) {
     const tp1Hit = side === "buy" ? livePrice >= trade.tp1Price : livePrice <= trade.tp1Price;
     if (tp1Hit) {
+      const tp1Qty = qty * 0.30;
+      const tp1PnlIncrement = (trade.tp1Price - entryPrice) * dir * tp1Qty;
+      const newClosedQty    = tp1Qty;
+      const newRemainingQty = qty - tp1Qty;
+      const newRealizedPnl  = Number(trade.realizedPnl ?? 0) + tp1PnlIncrement;
       await db.update(scalperTradesTable).set({
-        slPrice: parseFloat(entryPrice.toFixed(8)),   // move SL to entry = break-even
+        slPrice:            parseFloat(entryPrice.toFixed(8)),
         breakEvenActivated: true,
+        closedQty:          newClosedQty.toFixed(8),
+        remainingQty:       newRemainingQty.toFixed(8),
+        realizedPnl:        newRealizedPnl.toFixed(4),
       }).where(eq(scalperTradesTable.id, id));
-      logger.info({ tradeId: id, entryPrice, tp1Price: trade.tp1Price }, "CHT paper: TP1 hit — break-even activated");
-      // Re-read updated slPrice for close checks below
-      trade = { ...trade, slPrice: entryPrice, breakEvenActivated: true };
+      logger.info({ tradeId: id, entryPrice, tp1Price: trade.tp1Price, tp1PnlIncrement, newRealizedPnl }, "CHT paper: TP1 hit — break-even activated, 30% P&L recorded");
+      trade = { ...trade, slPrice: entryPrice, breakEvenActivated: true, closedQty: newClosedQty.toFixed(8), remainingQty: newRemainingQty.toFixed(8), realizedPnl: newRealizedPnl.toFixed(4) };
     }
   }
 
-  // Step 2: determine close reason (TP2 → TP3 → SL, in priority order)
-  let closeReason: string | null = null;
+  // Step 2a: TP2 partial (30%) — only after BE activated and TP2 not yet consumed
+  const closedQtyNow   = Number(trade.closedQty ?? 0);
+  const realizedPnlNow = Number(trade.realizedPnl ?? 0);
+  const tp2Consumed    = closedQtyNow > qty * 0.35;
 
-  if (trade.tp2Price != null) {
-    const hit = side === "buy" ? livePrice >= trade.tp2Price : livePrice <= trade.tp2Price;
-    if (hit) closeReason = "tp2";
+  if (trade.breakEvenActivated && !tp2Consumed && trade.tp2Price != null && entryPrice != null) {
+    const tp2Hit = side === "buy" ? livePrice >= trade.tp2Price : livePrice <= trade.tp2Price;
+    if (tp2Hit) {
+      const tp2Qty          = qty * 0.30;
+      const tp2PnlIncrement = (trade.tp2Price - entryPrice) * dir * tp2Qty;
+      const newClosedQty    = closedQtyNow + tp2Qty;
+      const newRemainingQty = qty - newClosedQty;
+      const newRealizedPnl  = realizedPnlNow + tp2PnlIncrement;
+      await db.update(scalperTradesTable).set({
+        closedQty:    newClosedQty.toFixed(8),
+        remainingQty: newRemainingQty.toFixed(8),
+        realizedPnl:  newRealizedPnl.toFixed(4),
+        livePrice,
+      }).where(eq(scalperTradesTable.id, id));
+      logger.info({ tradeId: id, tp2Price: trade.tp2Price, tp2PnlIncrement, newRealizedPnl, newRemainingQty }, "CHT paper: TP2 partial — 30% P&L recorded, trade still open");
+      trade = { ...trade, closedQty: newClosedQty.toFixed(8), remainingQty: newRemainingQty.toFixed(8), realizedPnl: newRealizedPnl.toFixed(4) };
+    }
   }
-  if (!closeReason && trade.tp3Price != null) {
-    const hit = side === "buy" ? livePrice >= trade.tp3Price : livePrice <= trade.tp3Price;
-    if (hit) closeReason = "tp3";
+
+  // Step 2b: TP3 final (40%) — only after TP2 consumed
+  const closedQtyAfterTp2   = Number(trade.closedQty ?? 0);
+  const realizedPnlAfterTp2 = Number(trade.realizedPnl ?? 0);
+  const tp2AlreadyConsumed  = closedQtyAfterTp2 > qty * 0.35;
+  const tp3Consumed         = closedQtyAfterTp2 > qty * 0.65;
+
+  if (tp2AlreadyConsumed && !tp3Consumed && trade.tp3Price != null && entryPrice != null) {
+    const tp3Hit = side === "buy" ? livePrice >= trade.tp3Price : livePrice <= trade.tp3Price;
+    if (tp3Hit) {
+      const tp3Qty    = qty - closedQtyAfterTp2;
+      const finalPnl  = realizedPnlAfterTp2 + (trade.tp3Price - entryPrice) * dir * tp3Qty;
+      await db.update(scalperTradesTable).set({
+        status:      "closed",
+        livePrice,
+        closePrice:  trade.tp3Price,
+        closeReason: "tp3",
+        closedQty:   qty.toFixed(8),
+        remainingQty: "0",
+        realizedPnl: finalPnl.toFixed(4),
+        pnl:         parseFloat(finalPnl.toFixed(4)),
+        closedAt:    new Date(),
+      }).where(eq(scalperTradesTable.id, id));
+      logger.info({ tradeId: id, tp3Price: trade.tp3Price, finalPnl }, "CHT paper: TP3 hit — trade fully closed");
+      await updateScalperCompoundBalance(finalPnl);
+      return;
+    }
   }
-  if (!closeReason && trade.slPrice != null) {
-    const hit = side === "buy" ? livePrice <= trade.slPrice : livePrice >= trade.slPrice;
-    if (hit) closeReason = "sl";
-  }
 
-  if (closeReason) {
-    const closePrice =
-      closeReason === "tp2" ? (trade.tp2Price ?? livePrice) :
-      closeReason === "tp3" ? (trade.tp3Price ?? livePrice) :
-      (trade.slPrice ?? livePrice);
-
-    const pnl = computeChtPnl(trade, closePrice);
-
-    await db.update(scalperTradesTable).set({
-      status: "closed",
-      livePrice,
-      closePrice,
-      closeReason,
-      pnl: pnl != null ? parseFloat(pnl.toFixed(4)) : null,
-      closedAt: new Date(),
-    }).where(eq(scalperTradesTable.id, id));
-
-    logger.info({ tradeId: id, closeReason, closePrice, livePrice, pnl }, "CHT paper: trade closed");
-    if (pnl != null) await updateScalperCompoundBalance(pnl);
-    return;
+  // Step 2c: SL — close remaining qty at SL price
+  if (trade.slPrice != null && entryPrice != null) {
+    const slHit = side === "buy" ? livePrice <= trade.slPrice : livePrice >= trade.slPrice;
+    if (slHit) {
+      const remainingQty = qty - closedQtyAfterTp2;
+      const finalPnl     = realizedPnlAfterTp2 + (trade.slPrice - entryPrice) * dir * remainingQty;
+      await db.update(scalperTradesTable).set({
+        status:      "closed",
+        livePrice,
+        closePrice:  trade.slPrice,
+        closeReason: "sl",
+        closedQty:   qty.toFixed(8),
+        remainingQty: "0",
+        realizedPnl: finalPnl.toFixed(4),
+        pnl:         parseFloat(finalPnl.toFixed(4)),
+        closedAt:    new Date(),
+      }).where(eq(scalperTradesTable.id, id));
+      logger.info({ tradeId: id, slPrice: trade.slPrice, remainingQty, finalPnl }, "CHT paper: SL hit — trade closed");
+      await updateScalperCompoundBalance(finalPnl);
+      return;
+    }
   }
 
   // Not closed — update unrealised P&L
@@ -205,68 +237,143 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
         }
       }
 
+      // A1: record 30% partial P&L at TP1 fill price
+      const tp1Qty          = (quantity ?? 0) * 0.30;
+      const tp1PnlIncrement = (result.price - (entryPrice ?? 0)) * (side === "buy" ? 1 : -1) * tp1Qty;
+      const newRealizedPnl  = Number(trade.realizedPnl ?? 0) + tp1PnlIncrement;
+      const newClosedQty    = tp1Qty;
+      const newRemainingQty = (quantity ?? 0) - tp1Qty;
+
       await db.update(scalperTradesTable).set({
-        slPrice:           entryPrice != null ? parseFloat(entryPrice.toFixed(8)) : undefined,
-        slOrderId:         newSlOrderId,
-        tp1OrderId:        null,  // TP1 consumed
+        slPrice:            entryPrice != null ? parseFloat(entryPrice.toFixed(8)) : undefined,
+        slOrderId:          newSlOrderId,
+        tp1OrderId:         null,  // TP1 consumed
         breakEvenActivated: true,
+        closedQty:          newClosedQty.toFixed(8),
+        remainingQty:       newRemainingQty.toFixed(8),
+        realizedPnl:        newRealizedPnl.toFixed(4),
       }).where(eq(scalperTradesTable.id, id));
 
-      logger.info({ tradeId: id }, "CHT live: break-even activated after TP1");
-      // Continue to update P&L — don't return early; trade still open
-      trade = { ...trade, tp1OrderId: null, slOrderId: newSlOrderId, slPrice: entryPrice ?? trade.slPrice, breakEvenActivated: true };
+      logger.info({ tradeId: id, tp1FillPrice: result.price, tp1PnlIncrement, newRealizedPnl }, "CHT live: TP1 — break-even activated, 30% P&L recorded");
+      // Continue — don't return early; trade still open for TP2/TP3/SL
+      trade = { ...trade, tp1OrderId: null, slOrderId: newSlOrderId, slPrice: entryPrice ?? trade.slPrice, breakEvenActivated: true, closedQty: newClosedQty.toFixed(8), remainingQty: newRemainingQty.toFixed(8), realizedPnl: newRealizedPnl.toFixed(4) };
     }
   }
 
-  // ── Check TP2 / TP3 / SL for full close ───────────────────────────────────
-  const exitChecks: { orderId: string | null | undefined; reason: string }[] = [
-    { orderId: trade.tp2OrderId, reason: "tp2" },
-    { orderId: trade.tp3OrderId, reason: "tp3" },
-    { orderId: trade.slOrderId,  reason: "sl"  },
-  ];
+  // A1: per-fill P&L + TP3 force-close + SL→BE
+  const qty = quantity ?? 0;
+  const dir = side === "buy" ? 1 : -1;
 
-  for (const { orderId, reason } of exitChecks) {
-    if (!orderId) continue;
-    const result = await checkFill(orderId);
+  // ── Check TP2 (30% partial exit — Gate.io order sized for 30% qty) ─────────
+  if (trade.tp2OrderId) {
+    const result = await checkFill(trade.tp2OrderId);
     if (result?.filled) {
-      const closePrice = result.price;
-      const pnl = computeChtPnl(trade, closePrice);
+      const tp2Qty          = qty * 0.30;
+      const tp2PnlIncrement = (result.price - (entryPrice ?? 0)) * dir * tp2Qty;
+      const newClosedQty    = Number(trade.closedQty ?? 0) + tp2Qty;
+      const newRemainingQty = qty - newClosedQty;
+      const newRealizedPnl  = Number(trade.realizedPnl ?? 0) + tp2PnlIncrement;
+      await db.update(scalperTradesTable).set({
+        tp2OrderId:   null,
+        closedQty:    newClosedQty.toFixed(8),
+        remainingQty: newRemainingQty.toFixed(8),
+        realizedPnl:  newRealizedPnl.toFixed(4),
+      }).where(eq(scalperTradesTable.id, id));
+      logger.info({ tradeId: id, tp2Price: result.price, tp2PnlIncrement, newRealizedPnl, newRemainingQty }, "CHT live: TP2 partial — 30% exit recorded, trade still open");
+      trade = { ...trade, tp2OrderId: null, closedQty: newClosedQty.toFixed(8), remainingQty: newRemainingQty.toFixed(8), realizedPnl: newRealizedPnl.toFixed(4) };
+    }
+  }
+
+  // ── Check TP3 (40% final exit + A1: force-close any rounding residual) ─────
+  if (trade.tp3OrderId) {
+    const result = await checkFill(trade.tp3OrderId);
+    if (result?.filled) {
+      const closedSoFar     = Number(trade.closedQty ?? 0);
+      const tp3FillQty      = result.qty > 0 ? result.qty : qty * 0.40;
+      const tp3PnlIncrement = (result.price - (entryPrice ?? 0)) * dir * tp3FillQty;
+      const newRealizedPnl  = Number(trade.realizedPnl ?? 0) + tp3PnlIncrement;
+
+      // A1: force-close any rounding residual (> 0.00001 base units)
+      let residualPnl = 0;
+      const residualQty = qty - closedSoFar - tp3FillQty;
+      if (residualQty > 0.00001) {
+        try {
+          const lp = await getLivePrice(gateSymbol);
+          const resiFmt  = await fmtForPair(gateSymbol, lp, residualQty);
+          const exitOrder = await placeSpotOrder({
+            currencyPair: gateSymbol,
+            side:         side === "buy" ? "sell" : "buy",
+            amount:       resiFmt.amount,
+            type:         "market",
+          });
+          const resiClose = parseFloat(exitOrder.avg_deal_price || lp.toString());
+          residualPnl = (resiClose - (entryPrice ?? 0)) * dir * residualQty;
+          logger.info({ tradeId: id, residualQty, resiClose, residualPnl }, "CHT live: TP3 residual force-closed");
+        } catch (resiErr) {
+          logger.warn({ tradeId: id, residualQty, resiErr }, "CHT live: TP3 residual force-close failed (dust — ignoring)");
+        }
+      }
+
+      const finalPnl = newRealizedPnl + residualPnl;
+      await tryCancel(trade.slOrderId, "sl-after-tp3");
 
       await db.update(scalperTradesTable).set({
-        status:     "closed",
-        closePrice,
-        closeReason: reason,
-        pnl:        pnl != null ? parseFloat(pnl.toFixed(4)) : null,
-        closedAt:   new Date(),
+        status:       "closed",
+        closePrice:   result.price,
+        closeReason:  "tp3",
+        closedQty:    qty.toFixed(8),
+        remainingQty: "0",
+        realizedPnl:  finalPnl.toFixed(4),
+        pnl:          parseFloat(finalPnl.toFixed(4)),
+        closedAt:     new Date(),
       }).where(eq(scalperTradesTable.id, id));
 
-      logger.info({ tradeId: id, reason, closePrice, pnl }, "CHT live: trade closed");
-      if (pnl != null) await updateScalperCompoundBalance(pnl);
-
-      // Cancel all remaining orders
-      const others = exitChecks
-        .filter(c => c.orderId && c.orderId !== orderId)
-        .map(c => c.orderId!);
-      if (trade.tp1OrderId) others.push(trade.tp1OrderId);
-      for (const oid of others) await tryCancel(oid, "companion");
-
+      logger.info({ tradeId: id, tp3Price: result.price, finalPnl }, "CHT live: TP3 — trade fully closed");
+      if (finalPnl) await updateScalperCompoundBalance(finalPnl);
       return;
     }
   }
 
-  // ── Price-based fallback: if all orders are terminal/missing ──────────────
-  // fix #6: Array.every(async fn) never awaits — predicate returns a truthy Promise,
-  // making allTerminal always true. Use Promise.all so results are real booleans.
+  // ── Check SL (close remaining qty at SL fill price) ──────────────────────
+  if (trade.slOrderId) {
+    const result = await checkFill(trade.slOrderId);
+    if (result?.filled) {
+      const closedSoFar  = Number(trade.closedQty ?? 0);
+      const remainingQty = qty - closedSoFar;
+      const slPnlIncrement = (result.price - (entryPrice ?? 0)) * dir * (remainingQty > 0 ? remainingQty : result.qty);
+      const finalPnl     = Number(trade.realizedPnl ?? 0) + slPnlIncrement;
+
+      await tryCancel(trade.tp2OrderId, "tp2-after-sl");
+      await tryCancel(trade.tp3OrderId, "tp3-after-sl");
+
+      await db.update(scalperTradesTable).set({
+        status:       "closed",
+        closePrice:   result.price,
+        closeReason:  "sl",
+        closedQty:    qty.toFixed(8),
+        remainingQty: "0",
+        realizedPnl:  finalPnl.toFixed(4),
+        pnl:          parseFloat(finalPnl.toFixed(4)),
+        closedAt:     new Date(),
+      }).where(eq(scalperTradesTable.id, id));
+
+      logger.info({ tradeId: id, slPrice: result.price, remainingQty, finalPnl }, "CHT live: SL hit — trade closed");
+      if (finalPnl) await updateScalperCompoundBalance(finalPnl);
+      return;
+    }
+  }
+
+  // ── Terminal check: if all exit orders are gone, update P&L only ─────────
+  const exitOrderIds = [trade.tp2OrderId, trade.tp3OrderId, trade.slOrderId].filter(Boolean);
   const terminalResults = await Promise.all(
-    exitChecks.map(async ({ orderId }) => {
-      if (!orderId) return true;
+    exitOrderIds.map(async (orderId) => {
       const r = await checkFill(orderId);
       return r == null || (r.filled === false && r.terminal);
     }),
   );
   const allTerminal = terminalResults.every(Boolean);
 
-  // Update live P&L
+  // Update live P&L (unrealized portion)
   try {
     const livePrice = await getLivePrice(gateSymbol);
     const pnl =

@@ -201,6 +201,17 @@ export async function placePriceTriggeredOrder(params: {
   return request<PriceTriggeredOrder>("POST", "/spot/price_orders", undefined, body);
 }
 
+// A5+D5: list all open price-triggered (SL/TP) orders across all pairs
+export interface PriceTriggeredOrderSummary {
+  id: number;
+  status: string;
+  market: string;
+}
+
+export async function listActivePriceTriggeredOrders(): Promise<PriceTriggeredOrderSummary[]> {
+  return request<PriceTriggeredOrderSummary[]>("GET", "/spot/price_orders", { status: "open" });
+}
+
 export async function cancelPriceTriggeredOrder(orderId: number, currencyPair: string): Promise<void> {
   await request("DELETE", `/spot/price_orders/${orderId}`, { market: currencyPair });
 }

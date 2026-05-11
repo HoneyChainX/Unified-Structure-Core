@@ -3,6 +3,7 @@ import { logger } from "./lib/logger";
 import { startSyncLoop } from "./services/sync";
 import { startScalperSyncLoop } from "./services/scalper-sync";
 import { startScalperLoop } from "./services/scalper-loop";
+import { runStartupReconcile } from "./services/startup-reconcile";
 
 const rawPort = process.env["PORT"];
 
@@ -25,6 +26,11 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+  // A5+D5: reconcile DB vs Gate.io before engines start; 10s timeout guard
+  Promise.race([
+    runStartupReconcile(),
+    new Promise<void>((_, reject) => setTimeout(() => reject(new Error("reconcile timeout")), 10_000)),
+  ]).catch((err: unknown) => logger.warn({ err }, "Startup reconcile failed or timed out — continuing"));
   startSyncLoop(30_000);
   startScalperSyncLoop(30_000);
   startScalperLoop(2.5 * 60_000);

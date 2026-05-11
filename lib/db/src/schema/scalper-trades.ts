@@ -1,4 +1,4 @@
-import { pgTable, serial, text, real, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, real, boolean, timestamp, numeric } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -40,6 +40,11 @@ export const scalperTradesTable = pgTable("scalper_trades", {
 
   closePrice: real("close_price"),
   closeReason: text("close_reason"),
+
+  // A1: per-fill CHT P&L tracking — closedQty/remainingQty in base-currency units
+  closedQty:    numeric("closed_qty"),    // base qty exited so far (string in TS — use Number())
+  remainingQty: numeric("remaining_qty"), // base qty still open (string in TS — use Number())
+  realizedPnl:  numeric("realized_pnl"), // USDT profit locked in by partial exits (string in TS — use Number())
 
   pnl: real("pnl"),
   errorMessage: text("error_message"),

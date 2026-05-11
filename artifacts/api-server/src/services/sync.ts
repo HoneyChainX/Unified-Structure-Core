@@ -102,6 +102,9 @@ async function syncOpenTrade(trade: typeof tradesTable.$inferSelect): Promise<vo
   if (trade.tp2OrderId) orderChecks.push({ orderId: Number(trade.tp2OrderId), reason: "tp2" });
   if (trade.tp3OrderId) orderChecks.push({ orderId: Number(trade.tp3OrderId), reason: "tp3" });
 
+  // A2: terminal order handling + poll timeout
+  let terminalOrderCount = 0;
+
   for (const { orderId, reason } of orderChecks) {
     try {
       const order = await getPriceTriggeredOrder(orderId, gateSymbol);
@@ -135,9 +138,44 @@ async function syncOpenTrade(trade: typeof tradesTable.$inferSelect): Promise<vo
         await updateCompoundBalance(pnl);
         return;
       }
+      // A2: terminal statuses that will never fill — count them
+      if (["cancelled", "expired", "failed"].includes(order.status)) {
+        logger.warn({ tradeId: id, orderId, reason, status: order.status }, "tv_bot.order.terminal {tradeId, gateOrderId, reason}");
+        terminalOrderCount++;
+      }
     } catch (err) {
-      logger.warn({ tradeId: id, orderId, err }, "Sync: failed to check price-triggered order status");
+      const msg = err instanceof Error ? err.message : String(err);
+      // A2: ORDER_NOT_FOUND means Gate.io has no record of this order — treat as terminal
+      if (msg.includes("ORDER_NOT_FOUND") || msg.includes("order not found") || msg.includes("404")) {
+        logger.warn({ tradeId: id, orderId, reason }, "tv_bot.order.terminal {tradeId, gateOrderId, reason}");
+        terminalOrderCount++;
+      } else {
+        logger.warn({ tradeId: id, orderId, err }, "Sync: failed to check price-triggered order status");
+      }
     }
+  }
+
+  // A2: if ALL known orders are terminal/not-found, no protection remains — cancel the trade
+  if (orderChecks.length > 0 && terminalOrderCount >= orderChecks.length) {
+    logger.warn({ tradeId: id, terminalOrderCount }, "tv_bot.order.terminal — all orders gone, marking cancelled");
+    await db.update(tradesTable).set({
+      status: "cancelled",
+      closeReason: "order_not_found",
+      closedAt: new Date(),
+    }).where(eq(tradesTable.id, id));
+    return;
+  }
+
+  // A2: poll timeout — trade open for > 30 min with no fills detected → mark error
+  const tradeAgeMs = Date.now() - (trade.createdAt?.getTime() ?? 0);
+  if (tradeAgeMs > 30 * 60 * 1000 && orderChecks.length > 0) {
+    logger.warn({ tradeId: id, ageMs: tradeAgeMs }, "tv_bot.order.terminal — poll_timeout after 30 min with no fills");
+    await db.update(tradesTable).set({
+      status: "error",
+      closeReason: "poll_timeout",
+      closedAt: new Date(),
+    }).where(eq(tradesTable.id, id));
+    return;
   }
 
   try {
