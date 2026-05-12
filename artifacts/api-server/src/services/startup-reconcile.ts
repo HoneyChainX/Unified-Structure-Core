@@ -4,7 +4,7 @@
 
 import { db, scalperTradesTable } from "@workspace/db";
 import { eq, inArray } from "drizzle-orm";
-import { listActivePriceTriggeredOrders } from "./gateio";
+import { listActivePriceTriggeredOrders, getSpotAccounts } from "./gateio";
 import { logger } from "../lib/logger";
 
 export async function runStartupReconcile(): Promise<void> {
@@ -69,12 +69,46 @@ export async function runStartupReconcile(): Promise<void> {
       const someGone = !allGone && knownOrderIds.some((oid) => !liveOrderIds.has(oid));
 
       if (allGone) {
-        // c) All protection orders gone from Gate.io — position is orphaned; mark error
-        logger.warn({ tradeId: trade.id, symbol: trade.gateSymbol, knownOrderIds }, "reconcile.orphan_db_no_gate — all Gate.io orders missing, marking error");
-        await db.update(scalperTradesTable)
-          .set({ status: "error", errorMessage: "reconcile: all protection orders missing from Gate.io at startup" })
-          .where(eq(scalperTradesTable.id, trade.id));
-        errored++;
+        // c) All protection orders gone from Gate.io — check actual wallet balance
+        // before marking error. Gate.io may have expired/cancelled the orders without
+        // closing the position (fee-rounding, order-book issues, etc.).
+        const baseCurrency = trade.gateSymbol.split("_")[0]!;
+        let availableBase = -1;
+        try {
+          const accounts = await getSpotAccounts();
+          const baseAcc = accounts.find((a) => a.currency === baseCurrency);
+          availableBase = baseAcc ? parseFloat(baseAcc.available) : 0;
+        } catch (balErr) {
+          logger.warn({ tradeId: trade.id, balErr }, "reconcile: could not fetch base balance — defaulting to mark error");
+        }
+
+        const minPresent = trade.quantity != null ? trade.quantity * 0.3 : 0;
+        if (availableBase > 0 && availableBase >= minPresent) {
+          // Wallet still holds a meaningful quantity — position is still open.
+          // Clear the dead order IDs so the sync loop re-places TP/SL protection.
+          logger.warn(
+            { tradeId: trade.id, symbol: trade.gateSymbol, availableBase, quantity: trade.quantity },
+            "reconcile.orphan_orders_balance_present — position still open, clearing order IDs for sync retry",
+          );
+          await db.update(scalperTradesTable)
+            .set({
+              tpOrderId: null, slOrderId: null,
+              tp1OrderId: null, tp2OrderId: null, tp3OrderId: null,
+              errorMessage: "reconcile: protection orders expired but position still open — sync will retry",
+            })
+            .where(eq(scalperTradesTable.id, trade.id));
+          warnings++;
+        } else {
+          // Balance zero (or fetch failed) — position was closed on Gate.io; mark error
+          logger.warn(
+            { tradeId: trade.id, symbol: trade.gateSymbol, availableBase, knownOrderIds },
+            "reconcile.orphan_db_no_gate — all Gate.io orders missing and no balance, marking error",
+          );
+          await db.update(scalperTradesTable)
+            .set({ status: "error", errorMessage: "reconcile: all protection orders missing from Gate.io at startup" })
+            .where(eq(scalperTradesTable.id, trade.id));
+          errored++;
+        }
       } else if (someGone) {
         // Partial mismatch — some orders still live; log warn only, leave for operator
         const missingIds = knownOrderIds.filter((oid) => !liveOrderIds.has(oid));
