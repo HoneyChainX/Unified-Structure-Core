@@ -438,6 +438,47 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
 
     logger.info({ tradeId: trade.id, filledPrice, filledQty, tpPrice: actualTp, slPrice: actualSl, strategy: isMicro ? "micro_2usd" : signal.strategy }, "Scalper: entry filled");
 
+    // ── Post-fill quantity validation ─────────────────────────────────────
+    // Validate every order slice against the pair's minBaseAmount BEFORE
+    // touching Gate.io, so we skip orders that would be rejected rather than
+    // fire-and-fail silently.  minBaseAmt was fetched above for the B1 check
+    // and is cached in-process — this is a synchronous cache hit, zero extra
+    // API calls.
+    function isAboveMin(qty: number): boolean {
+      return minBaseAmt <= 0 || qty >= minBaseAmt;
+    }
+
+    const slQtyOk      = isAboveMin(filledQty);         // SL always covers 100%
+    const microTpQtyOk = isAboveMin(filledQty * 0.50);  // Micro: 50%/50% split
+    const chtTp30QtyOk = isAboveMin(filledQty * 0.30);  // CHT: TP1 (30%) + TP2 (30%)
+    const chtTp40QtyOk = isAboveMin(filledQty * 0.40);  // CHT: TP3 (40%)
+
+    if (!slQtyOk) {
+      logger.error(
+        { tradeId: trade.id, filledQty, minBaseAmount: minBaseAmt, symbol: signal.gateSymbol },
+        "Scalper: filled qty below minBaseAmount — all SL/TP orders will be skipped; position is UNPROTECTED"
+      );
+    } else {
+      if (isMicro && !microTpQtyOk) {
+        logger.warn(
+          { tradeId: trade.id, tpSliceQty: parseFloat((filledQty * 0.50).toFixed(8)), minBaseAmount: minBaseAmt },
+          "Scalper: Micro TP slice (50%) below minBaseAmount — TP orders skipped, SL still placed"
+        );
+      }
+      if (isCht && !chtTp30QtyOk) {
+        logger.warn(
+          { tradeId: trade.id, tp1tp2SliceQty: parseFloat((filledQty * 0.30).toFixed(8)), minBaseAmount: minBaseAmt },
+          "Scalper: CHT TP1/TP2 slice (30%) below minBaseAmount — TP1 and TP2 orders skipped"
+        );
+      }
+      if (isCht && chtTp30QtyOk && !chtTp40QtyOk) {
+        logger.warn(
+          { tradeId: trade.id, tp3SliceQty: parseFloat((filledQty * 0.40).toFixed(8)), minBaseAmount: minBaseAmt },
+          "Scalper: CHT TP3 slice (40%) below minBaseAmount — TP3 order skipped"
+        );
+      }
+    }
+
     const orderUpdates: Record<string, string | undefined> = {};
     const orderErrors: string[] = [];
 
@@ -456,49 +497,61 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       ]);
 
       // TP1 (1R, 50%)
-      try {
-        const o = await placePriceTriggeredOrder({
-          currencyPair: signal.gateSymbol,
-          triggerPrice: fmtTp1.price, triggerRule,
-          side: exitSide, amount: fmtTp1.amount, orderPrice: fmtTp1.price,
-        });
-        orderUpdates.tp1OrderId = o.id.toString();
-        logger.info({ tradeId: trade.id, tp1OrderId: o.id, price: fmtTp1.price }, "Micro: TP1 order placed");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        orderErrors.push(`TP1: ${msg}`);
-        logger.warn({ tradeId: trade.id, err: msg }, "Micro: TP1 order failed");
+      if (microTpQtyOk) {
+        try {
+          const o = await placePriceTriggeredOrder({
+            currencyPair: signal.gateSymbol,
+            triggerPrice: fmtTp1.price, triggerRule,
+            side: exitSide, amount: fmtTp1.amount, orderPrice: fmtTp1.price,
+          });
+          orderUpdates.tp1OrderId = o.id.toString();
+          logger.info({ tradeId: trade.id, tp1OrderId: o.id, price: fmtTp1.price }, "Micro: TP1 order placed");
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          orderErrors.push(`TP1: ${msg}`);
+          logger.warn({ tradeId: trade.id, err: msg }, "Micro: TP1 order failed");
+        }
+      } else {
+        orderErrors.push(`TP1 skipped: qty ${parseFloat((filledQty * 0.50).toFixed(8))} below minBaseAmount ${minBaseAmt}`);
       }
 
       // TP2 (2R, 50%)
-      try {
-        const o = await placePriceTriggeredOrder({
-          currencyPair: signal.gateSymbol,
-          triggerPrice: fmtTp2.price, triggerRule,
-          side: exitSide, amount: fmtTp2.amount, orderPrice: fmtTp2.price,
-        });
-        orderUpdates.tp2OrderId = o.id.toString();
-        logger.info({ tradeId: trade.id, tp2OrderId: o.id, price: fmtTp2.price }, "Micro: TP2 order placed");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        orderErrors.push(`TP2: ${msg}`);
-        logger.warn({ tradeId: trade.id, err: msg }, "Micro: TP2 order failed");
+      if (microTpQtyOk) {
+        try {
+          const o = await placePriceTriggeredOrder({
+            currencyPair: signal.gateSymbol,
+            triggerPrice: fmtTp2.price, triggerRule,
+            side: exitSide, amount: fmtTp2.amount, orderPrice: fmtTp2.price,
+          });
+          orderUpdates.tp2OrderId = o.id.toString();
+          logger.info({ tradeId: trade.id, tp2OrderId: o.id, price: fmtTp2.price }, "Micro: TP2 order placed");
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          orderErrors.push(`TP2: ${msg}`);
+          logger.warn({ tradeId: trade.id, err: msg }, "Micro: TP2 order failed");
+        }
+      } else {
+        orderErrors.push(`TP2 skipped: qty ${parseFloat((filledQty * 0.50).toFixed(8))} below minBaseAmount ${minBaseAmt}`);
       }
 
       // SL — market order covering 100% until TP1 fires, then sync shrinks it
-      try {
-        const o = await placePriceTriggeredOrder({
-          currencyPair: signal.gateSymbol,
-          triggerPrice: fmtSl.price, triggerRule: slRule,
-          side: exitSide, amount: fmtSl.amount,
-          orderPrice: "0", orderType: "market",
-        });
-        orderUpdates.slOrderId = o.id.toString();
-        logger.info({ tradeId: trade.id, slOrderId: o.id, price: fmtSl.price }, "Micro: SL order placed");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        orderErrors.push(`SL: ${msg}`);
-        logger.warn({ tradeId: trade.id, err: msg }, "Micro: SL order failed");
+      if (slQtyOk) {
+        try {
+          const o = await placePriceTriggeredOrder({
+            currencyPair: signal.gateSymbol,
+            triggerPrice: fmtSl.price, triggerRule: slRule,
+            side: exitSide, amount: fmtSl.amount,
+            orderPrice: "0", orderType: "market",
+          });
+          orderUpdates.slOrderId = o.id.toString();
+          logger.info({ tradeId: trade.id, slOrderId: o.id, price: fmtSl.price }, "Micro: SL order placed");
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          orderErrors.push(`SL: ${msg}`);
+          logger.warn({ tradeId: trade.id, err: msg }, "Micro: SL order failed");
+        }
+      } else {
+        orderErrors.push(`SL skipped: qty ${filledQty} below minBaseAmount ${minBaseAmt}`);
       }
 
     // ── CHT: 3 TP orders + 1 SL covering full position ───────────────────
@@ -517,65 +570,81 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       ]);
 
       // TP1 (1R, 30%)
-      try {
-        const o = await placePriceTriggeredOrder({
-          currencyPair: signal.gateSymbol,
-          triggerPrice: fmt1.price, triggerRule,
-          side: exitSide, amount: fmt1.amount, orderPrice: fmt1.price,
-        });
-        orderUpdates.tp1OrderId = o.id.toString();
-        logger.info({ tradeId: trade.id, tp1OrderId: o.id, price: fmt1.price }, "CHT: TP1 order placed");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        orderErrors.push(`TP1: ${msg}`);
-        logger.warn({ tradeId: trade.id, err: msg }, "CHT: TP1 order failed");
+      if (chtTp30QtyOk) {
+        try {
+          const o = await placePriceTriggeredOrder({
+            currencyPair: signal.gateSymbol,
+            triggerPrice: fmt1.price, triggerRule,
+            side: exitSide, amount: fmt1.amount, orderPrice: fmt1.price,
+          });
+          orderUpdates.tp1OrderId = o.id.toString();
+          logger.info({ tradeId: trade.id, tp1OrderId: o.id, price: fmt1.price }, "CHT: TP1 order placed");
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          orderErrors.push(`TP1: ${msg}`);
+          logger.warn({ tradeId: trade.id, err: msg }, "CHT: TP1 order failed");
+        }
+      } else {
+        orderErrors.push(`TP1 skipped: qty ${parseFloat((filledQty * 0.30).toFixed(8))} below minBaseAmount ${minBaseAmt}`);
       }
 
       // TP2 (1.5R, 30%)
-      try {
-        const o = await placePriceTriggeredOrder({
-          currencyPair: signal.gateSymbol,
-          triggerPrice: fmt2.price, triggerRule,
-          side: exitSide, amount: fmt2.amount, orderPrice: fmt2.price,
-        });
-        orderUpdates.tp2OrderId = o.id.toString();
-        logger.info({ tradeId: trade.id, tp2OrderId: o.id, price: fmt2.price }, "CHT: TP2 order placed");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        orderErrors.push(`TP2: ${msg}`);
-        logger.warn({ tradeId: trade.id, err: msg }, "CHT: TP2 order failed");
+      if (chtTp30QtyOk) {
+        try {
+          const o = await placePriceTriggeredOrder({
+            currencyPair: signal.gateSymbol,
+            triggerPrice: fmt2.price, triggerRule,
+            side: exitSide, amount: fmt2.amount, orderPrice: fmt2.price,
+          });
+          orderUpdates.tp2OrderId = o.id.toString();
+          logger.info({ tradeId: trade.id, tp2OrderId: o.id, price: fmt2.price }, "CHT: TP2 order placed");
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          orderErrors.push(`TP2: ${msg}`);
+          logger.warn({ tradeId: trade.id, err: msg }, "CHT: TP2 order failed");
+        }
+      } else {
+        orderErrors.push(`TP2 skipped: qty ${parseFloat((filledQty * 0.30).toFixed(8))} below minBaseAmount ${minBaseAmt}`);
       }
 
       // TP3 (2R, 40%)
-      try {
-        const o = await placePriceTriggeredOrder({
-          currencyPair: signal.gateSymbol,
-          triggerPrice: fmt3.price, triggerRule,
-          side: exitSide, amount: fmt3.amount, orderPrice: fmt3.price,
-        });
-        orderUpdates.tp3OrderId = o.id.toString();
-        logger.info({ tradeId: trade.id, tp3OrderId: o.id, price: fmt3.price }, "CHT: TP3 order placed");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        orderErrors.push(`TP3: ${msg}`);
-        logger.warn({ tradeId: trade.id, err: msg }, "CHT: TP3 order failed");
+      if (chtTp40QtyOk) {
+        try {
+          const o = await placePriceTriggeredOrder({
+            currencyPair: signal.gateSymbol,
+            triggerPrice: fmt3.price, triggerRule,
+            side: exitSide, amount: fmt3.amount, orderPrice: fmt3.price,
+          });
+          orderUpdates.tp3OrderId = o.id.toString();
+          logger.info({ tradeId: trade.id, tp3OrderId: o.id, price: fmt3.price }, "CHT: TP3 order placed");
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          orderErrors.push(`TP3: ${msg}`);
+          logger.warn({ tradeId: trade.id, err: msg }, "CHT: TP3 order failed");
+        }
+      } else {
+        orderErrors.push(`TP3 skipped: qty ${parseFloat((filledQty * 0.40).toFixed(8))} below minBaseAmount ${minBaseAmt}`);
       }
 
       // SL — market order covering full position (protects 100% until TP1 fires, then sync replaces it)
       const slRule = signal.side === "buy" ? "<=" : ">=";
-      try {
-        const o = await placePriceTriggeredOrder({
-          currencyPair: signal.gateSymbol,
-          triggerPrice: fmtSl.price, triggerRule: slRule,
-          side: exitSide, amount: fmtSl.amount,
-          orderPrice: "0", orderType: "market",
-        });
-        orderUpdates.slOrderId = o.id.toString();
-        logger.info({ tradeId: trade.id, slOrderId: o.id, price: fmtSl.price }, "CHT: SL order placed");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        orderErrors.push(`SL: ${msg}`);
-        logger.warn({ tradeId: trade.id, err: msg }, "CHT: SL order failed");
+      if (slQtyOk) {
+        try {
+          const o = await placePriceTriggeredOrder({
+            currencyPair: signal.gateSymbol,
+            triggerPrice: fmtSl.price, triggerRule: slRule,
+            side: exitSide, amount: fmtSl.amount,
+            orderPrice: "0", orderType: "market",
+          });
+          orderUpdates.slOrderId = o.id.toString();
+          logger.info({ tradeId: trade.id, slOrderId: o.id, price: fmtSl.price }, "CHT: SL order placed");
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          orderErrors.push(`SL: ${msg}`);
+          logger.warn({ tradeId: trade.id, err: msg }, "CHT: SL order failed");
+        }
+      } else {
+        orderErrors.push(`SL skipped: qty ${filledQty} below minBaseAmount ${minBaseAmt}`);
       }
 
     } else {
@@ -583,39 +652,43 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       const tpFmt = await fmtForPair(signal.gateSymbol, actualTp, filledQty);
       const slFmt = await fmtForPair(signal.gateSymbol, actualSl, filledQty);
 
-      try {
-        const tpOrder = await placePriceTriggeredOrder({
-          currencyPair: signal.gateSymbol,
-          triggerPrice: tpFmt.price,
-          triggerRule:  signal.side === "buy" ? ">=" : "<=",
-          side:         signal.side === "buy" ? "sell" : "buy",
-          amount:       tpFmt.amount,
-          orderPrice:   tpFmt.price,
-        });
-        orderUpdates.tpOrderId = tpOrder.id.toString();
-        logger.info({ tradeId: trade.id, tpOrderId: tpOrder.id }, "Scalper: TP order placed");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.warn({ tradeId: trade.id, err: msg }, "Scalper: TP order failed");
-        orderErrors.push(`TP: ${msg}`);
-      }
+      if (slQtyOk) {
+        try {
+          const tpOrder = await placePriceTriggeredOrder({
+            currencyPair: signal.gateSymbol,
+            triggerPrice: tpFmt.price,
+            triggerRule:  signal.side === "buy" ? ">=" : "<=",
+            side:         signal.side === "buy" ? "sell" : "buy",
+            amount:       tpFmt.amount,
+            orderPrice:   tpFmt.price,
+          });
+          orderUpdates.tpOrderId = tpOrder.id.toString();
+          logger.info({ tradeId: trade.id, tpOrderId: tpOrder.id }, "Scalper: TP order placed");
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn({ tradeId: trade.id, err: msg }, "Scalper: TP order failed");
+          orderErrors.push(`TP: ${msg}`);
+        }
 
-      try {
-        const slOrder = await placePriceTriggeredOrder({
-          currencyPair: signal.gateSymbol,
-          triggerPrice: slFmt.price,
-          triggerRule:  signal.side === "buy" ? "<=" : ">=",
-          side:         signal.side === "buy" ? "sell" : "buy",
-          amount:       slFmt.amount,
-          orderPrice:   "0",
-          orderType:    "market",
-        });
-        orderUpdates.slOrderId = slOrder.id.toString();
-        logger.info({ tradeId: trade.id, slOrderId: slOrder.id }, "Scalper: SL order placed");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.warn({ tradeId: trade.id, err: msg }, "Scalper: SL order failed");
-        orderErrors.push(`SL: ${msg}`);
+        try {
+          const slOrder = await placePriceTriggeredOrder({
+            currencyPair: signal.gateSymbol,
+            triggerPrice: slFmt.price,
+            triggerRule:  signal.side === "buy" ? "<=" : ">=",
+            side:         signal.side === "buy" ? "sell" : "buy",
+            amount:       slFmt.amount,
+            orderPrice:   "0",
+            orderType:    "market",
+          });
+          orderUpdates.slOrderId = slOrder.id.toString();
+          logger.info({ tradeId: trade.id, slOrderId: slOrder.id }, "Scalper: SL order placed");
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn({ tradeId: trade.id, err: msg }, "Scalper: SL order failed");
+          orderErrors.push(`SL: ${msg}`);
+        }
+      } else {
+        orderErrors.push(`TP/SL skipped: qty ${filledQty} below minBaseAmount ${minBaseAmt}`);
       }
     }
 
