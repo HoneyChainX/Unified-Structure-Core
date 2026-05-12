@@ -32,6 +32,6 @@ app.listen(port, (err) => {
     new Promise<void>((_, reject) => setTimeout(() => reject(new Error("reconcile timeout")), 10_000)),
   ]).catch((err: unknown) => logger.warn({ err }, "Startup reconcile failed or timed out — continuing"));
   startSyncLoop(30_000);
-  startScalperSyncLoop(30_000);
+  startScalperSyncLoop(10_000);
   startScalperLoop(2.5 * 60_000);
 });
