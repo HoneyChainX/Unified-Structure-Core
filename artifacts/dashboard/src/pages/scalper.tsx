@@ -367,8 +367,8 @@ export function ScalperPage() {
 
   const { data: config, refetch: refetchConfig } = useFetch<ScalperConfig>("/api/scalper/config");
   const { data: status, refetch: refetchStatus } = useFetch<ScalperStatus>("/api/scalper/status");
-  // Open positions: poll every 15s for live P&L
-  const { data: openTrades_, refetch: refetchOpen } = useFetch<ScalperTrade[]>("/api/scalper/trades?status=open,paper&limit=100");
+  // Open positions: poll every 15s for live P&L (include "error" so filled-but-unprotected trades are visible)
+  const { data: openTrades_, refetch: refetchOpen } = useFetch<ScalperTrade[]>("/api/scalper/trades?status=open,paper,error&limit=100");
   // Closed history: poll every 60s (static data — only grows)
   const { data: closedTrades_, refetch: refetchClosed } = useFetch<ScalperTrade[]>("/api/scalper/trades?status=closed,cancelled&limit=200", 60000);
   const { data: perf, refetch: refetchPerf } = useFetch<ScalperPerformance>("/api/scalper/performance");

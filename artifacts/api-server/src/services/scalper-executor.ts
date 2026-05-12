@@ -373,6 +373,31 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       logger.info({ tradeId: trade.id, orderId: entryOrder.id, filledQty }, "fix #5: re-queried entry order to obtain filled_amount");
     }
 
+    // ── Fetch actual available base currency balance for SL/TP sizing ─────
+    // Gate.io deducts trading fees from the received tokens on a BUY, so the
+    // wallet may hold slightly less than filled_amount.  Using the live spot
+    // balance avoids placing SL/TP orders that Gate.io rejects for exceeding
+    // the available quantity.  We cap at filledQty to avoid over-ordering
+    // when a pre-existing balance is present.
+    const baseCurrency = signal.gateSymbol.split("_")[0]!;
+    let slTpQty = filledQty;
+    try {
+      const accounts = await getSpotAccounts();
+      const baseAcc = accounts.find((a) => a.currency === baseCurrency);
+      const availableBase = baseAcc ? parseFloat(baseAcc.available) : 0;
+      if (availableBase > 0) {
+        slTpQty = Math.min(filledQty, availableBase);
+        if (slTpQty < filledQty) {
+          logger.info(
+            { tradeId: trade.id, filledQty, availableBase, feeDiff: filledQty - slTpQty },
+            "Scalper: using available base balance for SL/TP sizing (fee adjustment)"
+          );
+        }
+      }
+    } catch (err) {
+      logger.warn({ tradeId: trade.id, err }, "Scalper: could not fetch base balance — using filledQty for SL/TP");
+    }
+
     // ── Micro mode: recalculate 2-TP levels at actual fill price ─────────
     const actualSlDist = signal.slPrice != null
       ? Math.abs(filledPrice - signal.slPrice)
@@ -403,7 +428,7 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       actualTp = signal.side === "buy" ? filledPrice + tpMove : filledPrice - tpMove;
       actualSl = signal.slPrice ?? (filledPrice - dir * actualSlDist);
     } else {
-      const tpMove = config.targetProfitUsdt / filledQty;
+      const tpMove = config.targetProfitUsdt / slTpQty;
       actualTp = signal.side === "buy" ? filledPrice + tpMove : filledPrice - tpMove;
       actualSl = signal.slPrice ?? (filledPrice - dir * actualSlDist);
     }
@@ -427,7 +452,7 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       entryOrderId: entryOrder.id,
       entryPrice:   filledPrice,
       livePrice:    filledPrice,
-      quantity:     filledQty,
+      quantity:     parseFloat(slTpQty.toFixed(8)),
       tpPrice:      parseFloat(actualTp.toFixed(8)),
       slPrice:      parseFloat(actualSl.toFixed(8)),
       ...cht3TpPrices,
@@ -436,7 +461,7 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       pnl:    0,
     }).where(eq(scalperTradesTable.id, trade.id));
 
-    logger.info({ tradeId: trade.id, filledPrice, filledQty, tpPrice: actualTp, slPrice: actualSl, strategy: isMicro ? "micro_2usd" : signal.strategy }, "Scalper: entry filled");
+    logger.info({ tradeId: trade.id, filledPrice, filledQty, slTpQty, tpPrice: actualTp, slPrice: actualSl, strategy: isMicro ? "micro_2usd" : signal.strategy }, "Scalper: entry filled");
 
     // ── Post-fill quantity validation ─────────────────────────────────────
     // Validate every order slice against the pair's minBaseAmount BEFORE
@@ -448,32 +473,32 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       return minBaseAmt <= 0 || qty >= minBaseAmt;
     }
 
-    const slQtyOk      = isAboveMin(filledQty);         // SL always covers 100%
-    const microTpQtyOk = isAboveMin(filledQty * 0.50);  // Micro: 50%/50% split
-    const chtTp30QtyOk = isAboveMin(filledQty * 0.30);  // CHT: TP1 (30%) + TP2 (30%)
-    const chtTp40QtyOk = isAboveMin(filledQty * 0.40);  // CHT: TP3 (40%)
+    const slQtyOk      = isAboveMin(slTpQty);         // SL always covers 100%
+    const microTpQtyOk = isAboveMin(slTpQty * 0.50);  // Micro: 50%/50% split
+    const chtTp30QtyOk = isAboveMin(slTpQty * 0.30);  // CHT: TP1 (30%) + TP2 (30%)
+    const chtTp40QtyOk = isAboveMin(slTpQty * 0.40);  // CHT: TP3 (40%)
 
     if (!slQtyOk) {
       logger.error(
-        { tradeId: trade.id, filledQty, minBaseAmount: minBaseAmt, symbol: signal.gateSymbol },
-        "Scalper: filled qty below minBaseAmount — all SL/TP orders will be skipped; position is UNPROTECTED"
+        { tradeId: trade.id, slTpQty, minBaseAmount: minBaseAmt, symbol: signal.gateSymbol },
+        "Scalper: available qty below minBaseAmount — all SL/TP orders will be skipped; position is UNPROTECTED"
       );
     } else {
       if (isMicro && !microTpQtyOk) {
         logger.warn(
-          { tradeId: trade.id, tpSliceQty: parseFloat((filledQty * 0.50).toFixed(8)), minBaseAmount: minBaseAmt },
+          { tradeId: trade.id, tpSliceQty: parseFloat((slTpQty * 0.50).toFixed(8)), minBaseAmount: minBaseAmt },
           "Scalper: Micro TP slice (50%) below minBaseAmount — TP orders skipped, SL still placed"
         );
       }
       if (isCht && !chtTp30QtyOk) {
         logger.warn(
-          { tradeId: trade.id, tp1tp2SliceQty: parseFloat((filledQty * 0.30).toFixed(8)), minBaseAmount: minBaseAmt },
+          { tradeId: trade.id, tp1tp2SliceQty: parseFloat((slTpQty * 0.30).toFixed(8)), minBaseAmount: minBaseAmt },
           "Scalper: CHT TP1/TP2 slice (30%) below minBaseAmount — TP1 and TP2 orders skipped"
         );
       }
       if (isCht && chtTp30QtyOk && !chtTp40QtyOk) {
         logger.warn(
-          { tradeId: trade.id, tp3SliceQty: parseFloat((filledQty * 0.40).toFixed(8)), minBaseAmount: minBaseAmt },
+          { tradeId: trade.id, tp3SliceQty: parseFloat((slTpQty * 0.40).toFixed(8)), minBaseAmount: minBaseAmt },
           "Scalper: CHT TP3 slice (40%) below minBaseAmount — TP3 order skipped"
         );
       }
@@ -484,8 +509,8 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
 
     // ── Micro $2 mode: 2 TP orders (50%/50%) + 1 full-position SL ────────
     if (isMicro && micro2TpPrices.tp1Price && micro2TpPrices.tp2Price) {
-      const q1 = filledQty * 0.50;
-      const q2 = filledQty * 0.50;
+      const q1 = slTpQty * 0.50;
+      const q2 = slTpQty * 0.50;
       const triggerRule = signal.side === "buy" ? ">=" : "<=";
       const slRule      = signal.side === "buy" ? "<=" : ">=";
       const exitSide    = signal.side === "buy" ? "sell" : "buy";
@@ -493,7 +518,7 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       const [fmtTp1, fmtTp2, fmtSl] = await Promise.all([
         fmtForPair(signal.gateSymbol, micro2TpPrices.tp1Price, q1),
         fmtForPair(signal.gateSymbol, micro2TpPrices.tp2Price, q2),
-        fmtForPair(signal.gateSymbol, actualSl, filledQty),
+        fmtForPair(signal.gateSymbol, actualSl, slTpQty),
       ]);
 
       // TP1 (1R, 50%)
@@ -512,7 +537,7 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
           logger.warn({ tradeId: trade.id, err: msg }, "Micro: TP1 order failed");
         }
       } else {
-        orderErrors.push(`TP1 skipped: qty ${parseFloat((filledQty * 0.50).toFixed(8))} below minBaseAmount ${minBaseAmt}`);
+        orderErrors.push(`TP1 skipped: qty ${parseFloat((slTpQty * 0.50).toFixed(8))} below minBaseAmount ${minBaseAmt}`);
       }
 
       // TP2 (2R, 50%)
@@ -531,7 +556,7 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
           logger.warn({ tradeId: trade.id, err: msg }, "Micro: TP2 order failed");
         }
       } else {
-        orderErrors.push(`TP2 skipped: qty ${parseFloat((filledQty * 0.50).toFixed(8))} below minBaseAmount ${minBaseAmt}`);
+        orderErrors.push(`TP2 skipped: qty ${parseFloat((slTpQty * 0.50).toFixed(8))} below minBaseAmount ${minBaseAmt}`);
       }
 
       // SL — market order covering 100% until TP1 fires, then sync shrinks it
@@ -551,14 +576,14 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
           logger.warn({ tradeId: trade.id, err: msg }, "Micro: SL order failed");
         }
       } else {
-        orderErrors.push(`SL skipped: qty ${filledQty} below minBaseAmount ${minBaseAmt}`);
+        orderErrors.push(`SL skipped: qty ${slTpQty} below minBaseAmount ${minBaseAmt}`);
       }
 
     // ── CHT: 3 TP orders + 1 SL covering full position ───────────────────
     } else if (isCht && cht3TpPrices.tp1Price && cht3TpPrices.tp2Price && cht3TpPrices.tp3Price) {
-      const q1 = filledQty * 0.30;
-      const q2 = filledQty * 0.30;
-      const q3 = filledQty * 0.40;
+      const q1 = slTpQty * 0.30;
+      const q2 = slTpQty * 0.30;
+      const q3 = slTpQty * 0.40;
       const triggerRule = signal.side === "buy" ? ">=" : "<=";
       const exitSide    = signal.side === "buy" ? "sell" : "buy";
 
@@ -566,7 +591,7 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
         fmtForPair(signal.gateSymbol, cht3TpPrices.tp1Price, q1),
         fmtForPair(signal.gateSymbol, cht3TpPrices.tp2Price, q2),
         fmtForPair(signal.gateSymbol, cht3TpPrices.tp3Price, q3),
-        fmtForPair(signal.gateSymbol, actualSl, filledQty),
+        fmtForPair(signal.gateSymbol, actualSl, slTpQty),
       ]);
 
       // TP1 (1R, 30%)
@@ -585,7 +610,7 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
           logger.warn({ tradeId: trade.id, err: msg }, "CHT: TP1 order failed");
         }
       } else {
-        orderErrors.push(`TP1 skipped: qty ${parseFloat((filledQty * 0.30).toFixed(8))} below minBaseAmount ${minBaseAmt}`);
+        orderErrors.push(`TP1 skipped: qty ${parseFloat((slTpQty * 0.30).toFixed(8))} below minBaseAmount ${minBaseAmt}`);
       }
 
       // TP2 (1.5R, 30%)
@@ -604,7 +629,7 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
           logger.warn({ tradeId: trade.id, err: msg }, "CHT: TP2 order failed");
         }
       } else {
-        orderErrors.push(`TP2 skipped: qty ${parseFloat((filledQty * 0.30).toFixed(8))} below minBaseAmount ${minBaseAmt}`);
+        orderErrors.push(`TP2 skipped: qty ${parseFloat((slTpQty * 0.30).toFixed(8))} below minBaseAmount ${minBaseAmt}`);
       }
 
       // TP3 (2R, 40%)
@@ -623,7 +648,7 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
           logger.warn({ tradeId: trade.id, err: msg }, "CHT: TP3 order failed");
         }
       } else {
-        orderErrors.push(`TP3 skipped: qty ${parseFloat((filledQty * 0.40).toFixed(8))} below minBaseAmount ${minBaseAmt}`);
+        orderErrors.push(`TP3 skipped: qty ${parseFloat((slTpQty * 0.40).toFixed(8))} below minBaseAmount ${minBaseAmt}`);
       }
 
       // SL — market order covering full position (protects 100% until TP1 fires, then sync replaces it)
@@ -644,13 +669,13 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
           logger.warn({ tradeId: trade.id, err: msg }, "CHT: SL order failed");
         }
       } else {
-        orderErrors.push(`SL skipped: qty ${filledQty} below minBaseAmount ${minBaseAmt}`);
+        orderErrors.push(`SL skipped: qty ${slTpQty} below minBaseAmount ${minBaseAmt}`);
       }
 
     } else {
       // ── Standard single TP + SL (BB+RSI / SMC) ──────────────────────────
-      const tpFmt = await fmtForPair(signal.gateSymbol, actualTp, filledQty);
-      const slFmt = await fmtForPair(signal.gateSymbol, actualSl, filledQty);
+      const tpFmt = await fmtForPair(signal.gateSymbol, actualTp, slTpQty);
+      const slFmt = await fmtForPair(signal.gateSymbol, actualSl, slTpQty);
 
       if (slQtyOk) {
         try {
@@ -688,7 +713,7 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
           orderErrors.push(`SL: ${msg}`);
         }
       } else {
-        orderErrors.push(`TP/SL skipped: qty ${filledQty} below minBaseAmount ${minBaseAmt}`);
+        orderErrors.push(`TP/SL skipped: qty ${slTpQty} below minBaseAmount ${minBaseAmt}`);
       }
     }
 

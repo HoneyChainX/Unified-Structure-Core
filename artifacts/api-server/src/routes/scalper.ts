@@ -136,7 +136,7 @@ router.delete("/trades/:id/cancel", async (req, res): Promise<void> => {
   const [trade] = await db.select().from(scalperTradesTable).where(eq(scalperTradesTable.id, tradeId));
   if (!trade) { res.status(404).json({ error: "Trade not found" }); return; }
 
-  if (!["open", "paper"].includes(trade.status)) {
+  if (!["open", "paper", "error"].includes(trade.status)) {
     res.status(400).json({ error: "Trade is not open" });
     return;
   }
