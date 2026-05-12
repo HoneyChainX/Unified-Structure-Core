@@ -325,6 +325,7 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
         remainingQty: "0",
         realizedPnl:  finalPnl.toFixed(4),
         pnl:          parseFloat(finalPnl.toFixed(4)),
+        tp1OrderId: null, tp2OrderId: null, tp3OrderId: null, slOrderId: null,
         closedAt:     new Date(),
       }).where(eq(scalperTradesTable.id, id));
 
@@ -354,6 +355,7 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
         remainingQty: "0",
         realizedPnl:  finalPnl.toFixed(4),
         pnl:          parseFloat(finalPnl.toFixed(4)),
+        tp1OrderId: null, tp2OrderId: null, tp3OrderId: null, slOrderId: null,
         closedAt:     new Date(),
       }).where(eq(scalperTradesTable.id, id));
 
@@ -363,19 +365,20 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
     }
   }
 
-  // ── Terminal check: if all exit orders are gone, update P&L only ─────────
-  const exitOrderIds = [trade.tp2OrderId, trade.tp3OrderId, trade.slOrderId].filter(Boolean);
+  // ── Terminal check: if all exit orders are gone, attempt emergency close ──
+  const exitOrderIds = [trade.tp1OrderId, trade.tp2OrderId, trade.tp3OrderId, trade.slOrderId].filter(Boolean);
   const terminalResults = await Promise.all(
     exitOrderIds.map(async (orderId) => {
       const r = await checkFill(orderId);
       return r == null || (r.filled === false && r.terminal);
     }),
   );
-  const allTerminal = terminalResults.every(Boolean);
+  const allTerminal = exitOrderIds.length > 0 && terminalResults.every(Boolean);
 
   // Update live P&L (unrealized portion)
+  let livePrice: number | null = null;
   try {
-    const livePrice = await getLivePrice(gateSymbol);
+    livePrice = await getLivePrice(gateSymbol);
     const pnl =
       entryPrice != null && quantity != null
         ? (side === "buy" ? livePrice - entryPrice : entryPrice - livePrice) * quantity
@@ -386,6 +389,52 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
     logger.debug({ tradeId: id, allTerminal }, "CHT live: exit order terminal check");
   } catch {
     // Non-critical
+  }
+
+  // Emergency close: all orders vanished without a detected fill
+  if (allTerminal && quantity != null && quantity > 0 && livePrice != null) {
+    for (const oid of exitOrderIds as string[]) {
+      try { await cancelPriceTriggeredOrder(parseInt(oid), gateSymbol); } catch { /* already gone */ }
+    }
+    try {
+      const exitFmt = await fmtForPair(gateSymbol, livePrice, quantity);
+      const exitOrder = await placeSpotOrder({
+        currencyPair: gateSymbol,
+        side: side === "buy" ? "sell" : "buy",
+        amount: exitFmt.amount, type: "market",
+      });
+      const actualClose = parseFloat(exitOrder.avg_deal_price || livePrice.toString());
+      const finalPnl = Number(trade.realizedPnl ?? 0) +
+        (entryPrice != null
+          ? (side === "buy" ? actualClose - entryPrice : entryPrice - actualClose) * quantity
+          : 0);
+      await db.update(scalperTradesTable).set({
+        status: "closed", livePrice, closePrice: actualClose, closeReason: "terminal",
+        pnl: parseFloat(finalPnl.toFixed(4)),
+        tp1OrderId: null, tp2OrderId: null, tp3OrderId: null, slOrderId: null,
+        closedAt: new Date(),
+      }).where(eq(scalperTradesTable.id, id));
+      logger.warn({ tradeId: id, actualClose, finalPnl }, "CHT live: terminal orders — emergency exit placed, trade closed");
+      await updateScalperCompoundBalance(finalPnl);
+    } catch (exitErr) {
+      const exitMsg = exitErr instanceof Error ? exitErr.message : String(exitErr);
+      if (exitMsg.includes("BALANCE_NOT_ENOUGH") || exitMsg.includes("balance")) {
+        const finalPnl = Number(trade.realizedPnl ?? 0) +
+          (entryPrice != null
+            ? (side === "buy" ? livePrice - entryPrice : entryPrice - livePrice) * quantity
+            : 0);
+        await db.update(scalperTradesTable).set({
+          status: "closed", livePrice, closePrice: livePrice, closeReason: "terminal",
+          pnl: parseFloat(finalPnl.toFixed(4)),
+          tp1OrderId: null, tp2OrderId: null, tp3OrderId: null, slOrderId: null,
+          closedAt: new Date(),
+        }).where(eq(scalperTradesTable.id, id));
+        logger.warn({ tradeId: id, livePrice, finalPnl }, "CHT live: terminal orders — balance gone, trade auto-closed at live price");
+        await updateScalperCompoundBalance(finalPnl);
+      } else {
+        logger.error({ tradeId: id, exitErr: exitMsg }, "CHT live: terminal emergency exit failed (transient)");
+      }
+    }
   }
 }
 
@@ -468,6 +517,7 @@ async function syncStandardTrade(trade: typeof scalperTradesTable.$inferSelect):
         await db.update(scalperTradesTable).set({
           status: "closed", closePrice, closeReason: reason,
           pnl: pnl != null ? parseFloat(pnl.toFixed(4)) : null,
+          tpOrderId: null, slOrderId: null,
           closedAt: new Date(),
         }).where(eq(scalperTradesTable.id, id));
 
@@ -597,6 +647,7 @@ async function syncStandardTrade(trade: typeof scalperTradesTable.$inferSelect):
         await db.update(scalperTradesTable).set({
           status: "closed", livePrice, closePrice: actualClose, closeReason,
           pnl: pnl != null ? parseFloat(pnl.toFixed(4)) : null,
+          tpOrderId: null, slOrderId: null,
           closedAt: new Date(),
         }).where(eq(scalperTradesTable.id, id));
 
@@ -609,6 +660,9 @@ async function syncStandardTrade(trade: typeof scalperTradesTable.$inferSelect):
       // position was likely already closed by Gate.io. Try a market sell to confirm;
       // if BALANCE_NOT_ENOUGH, the asset is gone — mark as closed at live price.
       if (allOrdersTerminal && quantity != null && quantity > 0) {
+        for (const oid of [trade.tpOrderId, trade.slOrderId].filter(Boolean) as string[]) {
+          try { await cancelPriceTriggeredOrder(parseInt(oid), gateSymbol); } catch { /* already gone */ }
+        }
         try {
           const exitFmt = await fmtForPair(gateSymbol, livePrice, quantity);
           const exitOrder = await placeSpotOrder({
@@ -624,6 +678,7 @@ async function syncStandardTrade(trade: typeof scalperTradesTable.$inferSelect):
           await db.update(scalperTradesTable).set({
             status: "closed", livePrice, closePrice: actualClose, closeReason: "terminal",
             pnl: pnl != null ? parseFloat(pnl.toFixed(4)) : null,
+            tpOrderId: null, slOrderId: null,
             closedAt: new Date(),
           }).where(eq(scalperTradesTable.id, id));
           logger.warn({ tradeId: id, actualClose, pnl }, "Scalper: terminal orders — emergency exit placed, trade closed");
@@ -640,6 +695,7 @@ async function syncStandardTrade(trade: typeof scalperTradesTable.$inferSelect):
             await db.update(scalperTradesTable).set({
               status: "closed", livePrice, closePrice: livePrice, closeReason: "terminal",
               pnl: pnl != null ? parseFloat(pnl.toFixed(4)) : null,
+              tpOrderId: null, slOrderId: null,
               closedAt: new Date(),
             }).where(eq(scalperTradesTable.id, id));
             logger.warn({ tradeId: id, livePrice, pnl }, "Scalper: terminal orders — balance gone, trade auto-closed at live price");
@@ -840,6 +896,7 @@ async function syncMicroLiveTrade(trade: typeof scalperTradesTable.$inferSelect)
       await db.update(scalperTradesTable).set({
         status: "closed", closePrice, closeReason: reason,
         pnl: pnl != null ? parseFloat(pnl.toFixed(4)) : null,
+        tp1OrderId: null, tp2OrderId: null, slOrderId: null,
         closedAt: new Date(),
       }).where(eq(scalperTradesTable.id, id));
 
@@ -852,17 +909,73 @@ async function syncMicroLiveTrade(trade: typeof scalperTradesTable.$inferSelect)
     }
   }
 
+  // ── Terminal check: if all exit orders are gone, attempt emergency close ──
+  const microExitOrderIds = [trade.tp1OrderId, trade.tp2OrderId, trade.slOrderId].filter(Boolean);
+  const microTerminalResults = await Promise.all(
+    microExitOrderIds.map(async (orderId) => {
+      const r = await checkFill(orderId);
+      return r == null || (r.filled === false && r.terminal);
+    }),
+  );
+  const microAllTerminal = microExitOrderIds.length > 0 && microTerminalResults.every(Boolean);
+
   // Update live P&L
+  let microLivePrice: number | null = null;
   try {
-    const livePrice = await getLivePrice(gateSymbol);
+    microLivePrice = await getLivePrice(gateSymbol);
     const pnl =
       entryPrice != null && quantity != null
-        ? (side === "buy" ? livePrice - entryPrice : entryPrice - livePrice) * quantity
+        ? (side === "buy" ? microLivePrice - entryPrice : entryPrice - microLivePrice) * quantity
         : null;
     await db.update(scalperTradesTable)
-      .set({ livePrice, pnl: pnl != null ? parseFloat(pnl.toFixed(4)) : null })
+      .set({ livePrice: microLivePrice, pnl: pnl != null ? parseFloat(pnl.toFixed(4)) : null })
       .where(eq(scalperTradesTable.id, id));
   } catch { /* non-critical */ }
+
+  if (microAllTerminal && quantity != null && quantity > 0 && microLivePrice != null) {
+    for (const oid of microExitOrderIds as string[]) {
+      try { await cancelPriceTriggeredOrder(parseInt(oid), gateSymbol); } catch { /* already gone */ }
+    }
+    try {
+      const exitFmt = await fmtForPair(gateSymbol, microLivePrice, quantity);
+      const exitOrder = await placeSpotOrder({
+        currencyPair: gateSymbol,
+        side: side === "buy" ? "sell" : "buy",
+        amount: exitFmt.amount, type: "market",
+      });
+      const actualClose = parseFloat(exitOrder.avg_deal_price || microLivePrice.toString());
+      const pnl =
+        entryPrice != null
+          ? (side === "buy" ? actualClose - entryPrice : entryPrice - actualClose) * quantity
+          : null;
+      await db.update(scalperTradesTable).set({
+        status: "closed", livePrice: microLivePrice, closePrice: actualClose, closeReason: "terminal",
+        pnl: pnl != null ? parseFloat(pnl.toFixed(4)) : null,
+        tp1OrderId: null, tp2OrderId: null, slOrderId: null,
+        closedAt: new Date(),
+      }).where(eq(scalperTradesTable.id, id));
+      logger.warn({ tradeId: id, actualClose, pnl }, "Micro live: terminal orders — emergency exit placed, trade closed");
+      if (pnl != null) await updateScalperCompoundBalance(pnl);
+    } catch (exitErr) {
+      const exitMsg = exitErr instanceof Error ? exitErr.message : String(exitErr);
+      if (exitMsg.includes("BALANCE_NOT_ENOUGH") || exitMsg.includes("balance")) {
+        const pnl =
+          entryPrice != null
+            ? (side === "buy" ? microLivePrice - entryPrice : entryPrice - microLivePrice) * quantity
+            : null;
+        await db.update(scalperTradesTable).set({
+          status: "closed", livePrice: microLivePrice, closePrice: microLivePrice, closeReason: "terminal",
+          pnl: pnl != null ? parseFloat(pnl.toFixed(4)) : null,
+          tp1OrderId: null, tp2OrderId: null, slOrderId: null,
+          closedAt: new Date(),
+        }).where(eq(scalperTradesTable.id, id));
+        logger.warn({ tradeId: id, microLivePrice, pnl }, "Micro live: terminal orders — balance gone, trade auto-closed at live price");
+        if (pnl != null) await updateScalperCompoundBalance(pnl);
+      } else {
+        logger.error({ tradeId: id, exitErr: exitMsg }, "Micro live: terminal emergency exit failed (transient)");
+      }
+    }
+  }
 }
 
 // ── Main sync dispatcher ──────────────────────────────────────────────────────
