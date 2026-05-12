@@ -46,6 +46,7 @@ async function syncOpenTrade(trade: typeof tradesTable.$inferSelect): Promise<vo
         const slHit = side === "buy" ? livePrice <= trade.slPrice : livePrice >= trade.slPrice;
         if (slHit) closeReason = "sl";
       }
+      // tp1/tp2/tp3 — used by multi-TP strategies (CHT, Micro)
       if (!closeReason && trade.tp1Price != null) {
         const tp1Hit = side === "buy" ? livePrice >= trade.tp1Price : livePrice <= trade.tp1Price;
         if (tp1Hit) closeReason = "tp1";
