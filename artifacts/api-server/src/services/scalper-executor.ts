@@ -115,7 +115,8 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       const liveBalance = await getUsdtBalance();
       positionSize = liveBalance * (config.positionSizePct / 100);
       logger.debug({ liveBalance, positionSizePct: config.positionSizePct, positionSize }, "Scalper: % position sizing");
-    } catch {
+    } catch (err) {
+      logger.warn({ err }, "Scalper: balance fetch failed — falling back to fixed positionSizeUsdt");
       positionSize = config.positionSizeUsdt;
     }
   } else if (config.compoundingEnabled && config.compoundBalance != null) {
@@ -245,7 +246,7 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       logger.warn({ tradeId: trade.id, err }, "Scalper paper: using signal price as fallback");
     }
 
-    const qty = isMicro ? positionSize / livePrice : positionSize / livePrice;
+    const qty = isMicro ? quantity : positionSize / livePrice;
 
     // For Micro mode: recalculate 2-TP levels at actual fill price
     if (isMicro) {
