@@ -209,7 +209,7 @@ interface MarketCondition {
   btcTrend: "BULLISH" | "BEARISH" | "NEUTRAL";
   label: string;
   description: string;
-  favoredStrategy: "bb_rsi" | "smc_mss" | "cht";
+  favoredStrategy: "bb_rsi" | "smc_mss" | "cht" | "mrx-hybrid";
   favoredReason: string;
 }
 
@@ -265,6 +265,15 @@ interface LiveScanEntry {
     tp3: number | null;
     sl: number | null;
     rr: number | null;
+  };
+  mrx?: {
+    detected: boolean;
+    rsi: number | null;
+    atrPct: number | null;
+    inOB: boolean;
+    tp: number | null;
+    sl: number | null;
+    gatesHit: number | null;
   };
 }
 
@@ -335,6 +344,120 @@ function useFetch<T>(url: string, intervalMs = 15000) {
   });
 
   return { data, loading, error, refetch };
+}
+
+interface MrxStatusData {
+  autoPaused: boolean;
+  pauseReason: string | null;
+  recentWinRate: number | null;
+  recentTradeCount: number;
+  blacklistCount: number;
+}
+
+function MrxStatusPanel() {
+  const [status, setStatus] = useState<MrxStatusData | null>(null);
+  const [resuming, setResuming] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useState(() => {
+    const load = () =>
+      api<{ mrxStatus: MrxStatusData }>("/api/scalper/performance")
+        .then((d) => setStatus(d.mrxStatus ?? null))
+        .catch(() => null);
+    load();
+    const t = setInterval(load, 30000);
+    return () => clearInterval(t);
+  });
+
+  async function resume() {
+    setResuming(true);
+    setMsg(null);
+    try {
+      await api("/api/scalper/mrx/resume", { method: "POST" });
+      setMsg("MRX scanner resumed.");
+      setStatus((s) => s ? { ...s, autoPaused: false, pauseReason: null } : s);
+    } catch {
+      setMsg("Failed to resume — check server logs.");
+    } finally {
+      setResuming(false);
+    }
+  }
+
+  return (
+    <div className="p-4 border-b border-border space-y-3">
+      <div className="flex items-center justify-between">
+        <label className="text-xs text-muted-foreground tracking-widest flex items-center gap-2">
+          <span className="text-orange-400">◈</span> MRX — MEAN REVERSION XPRESS
+        </label>
+        <span className="text-[10px] font-mono text-orange-400/70 border border-orange-500/20 bg-orange-500/5 px-2 py-0.5">
+          PARALLEL SCANNER · ALWAYS ACTIVE
+        </span>
+      </div>
+
+      {/* Fixed parameters */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs font-mono">
+        {[
+          { label: "TIMEFRAME", value: "3m candles" },
+          { label: "DIRECTION", value: "LONG ONLY" },
+          { label: "TP TARGET", value: "+0.28%" },
+          { label: "SL GUARD", value: "−2.5%" },
+        ].map(({ label, value }) => (
+          <div key={label} className="border border-orange-500/20 bg-orange-500/5 px-3 py-2">
+            <div className="text-[10px] text-muted-foreground tracking-widest mb-0.5">{label}</div>
+            <div className="text-orange-300 font-bold">{value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 7-gate evaluator summary */}
+      <div className="text-[10px] text-muted-foreground/70 font-mono leading-relaxed border border-border/30 bg-secondary/20 px-3 py-2">
+        <span className="text-orange-400/80 font-bold">7 GATES: </span>
+        BB Lower touch · RSI ≤ 25 · ATR% in range · BB width not too narrow · Volume spike · HTF EMA filter · Pump guard (no candle &gt;2.5%)
+        <span className="ml-2 text-orange-400/60">+ Gate 8: 1h Order Block confluence (bonus)</span>
+      </div>
+
+      {/* Live status */}
+      {status && (
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className={`flex items-center gap-2 px-3 py-1.5 border text-xs font-mono ${
+            status.autoPaused
+              ? "border-orange-500/60 bg-orange-500/10 text-orange-300"
+              : "border-green-500/40 bg-green-500/8 text-green-300"
+          }`}>
+            <span className={`w-2 h-2 rounded-full ${status.autoPaused ? "bg-orange-400 animate-pulse" : "bg-green-400"}`} />
+            {status.autoPaused ? "AUTO-PAUSED" : "SCANNING"}
+          </div>
+          {status.recentTradeCount > 0 && (
+            <div className="text-xs font-mono text-muted-foreground">
+              Recent WR: <span className={status.recentWinRate != null && status.recentWinRate >= 70 ? "text-green-400" : "text-red-400"}>
+                {status.recentWinRate != null ? `${status.recentWinRate.toFixed(0)}%` : "—"}
+              </span>
+              <span className="ml-1 opacity-50">({status.recentTradeCount} trades)</span>
+            </div>
+          )}
+          {status.blacklistCount > 0 && (
+            <div className="text-xs font-mono text-muted-foreground">
+              Cooldown: <span className="text-orange-400">{status.blacklistCount} symbols</span>
+            </div>
+          )}
+          {status.autoPaused && (
+            <button
+              onClick={resume}
+              disabled={resuming}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono font-bold border border-orange-500 bg-orange-500/20 text-orange-300 hover:bg-orange-500/30 transition-colors disabled:opacity-50"
+            >
+              <RotateCcw className={`w-3 h-3 ${resuming ? "animate-spin" : ""}`} />
+              {resuming ? "RESUMING…" : "RESUME SCANNER"}
+            </button>
+          )}
+          {status.pauseReason && (
+            <div className="text-[10px] text-orange-400/70 font-mono">{status.pauseReason}</div>
+          )}
+        </div>
+      )}
+      {msg && <div className="text-xs font-mono text-orange-300">{msg}</div>}
+    </div>
+  );
 }
 
 function pnlClass(pnl: number | null): string {
@@ -652,11 +775,11 @@ export function ScalperPage() {
           {perf.strategyStats && perf.strategyStats.length > 0 && (
             <div className="border-t border-border/40 pt-3 space-y-2">
               <div className="text-xs text-muted-foreground tracking-widest font-bold">BY STRATEGY</div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                {(["bb_rsi", "smc_mss", "cht"] as const).map((strat) => {
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {(["bb_rsi", "smc_mss", "cht", "mrx-hybrid"] as const).map((strat) => {
                   const s = perf.strategyStats.find((x) => x.strategy === strat);
-                  const label = strat === "bb_rsi" ? "BB+RSI" : strat === "smc_mss" ? "SMC MSS" : "CHT ENGINE";
-                  const color = strat === "bb_rsi" ? "text-cyan-400 border-cyan-500/30" : strat === "smc_mss" ? "text-violet-400 border-violet-500/30" : "text-amber-400 border-amber-500/30";
+                  const label = strat === "bb_rsi" ? "BB+RSI" : strat === "smc_mss" ? "SMC MSS" : strat === "cht" ? "CHT ENGINE" : "MRX";
+                  const color = strat === "bb_rsi" ? "text-cyan-400 border-cyan-500/30" : strat === "smc_mss" ? "text-violet-400 border-violet-500/30" : strat === "cht" ? "text-amber-400 border-amber-500/30" : "text-orange-400 border-orange-500/30";
                   const isBest = perf.bestModeNow?.strategy === strat && (s?.count ?? 0) > 0;
                   return (
                     <div key={strat} className={`border bg-secondary/20 px-3 py-2 relative ${isBest ? "border-yellow-500/50 bg-yellow-500/5" : "border-border/50"}`}>
@@ -701,18 +824,19 @@ export function ScalperPage() {
               mc.regime === "VOLATILE"      ? "bg-orange-400" :
                                              "bg-zinc-400";
 
-            const stratLabel = (s: string) => s === "bb_rsi" ? "BB+RSI" : s === "smc_mss" ? "SMC MSS" : "CHT ENGINE";
+            const stratLabel = (s: string) => s === "bb_rsi" ? "BB+RSI" : s === "smc_mss" ? "SMC MSS" : s === "cht" ? "CHT ENGINE" : "MRX";
             const stratColor = (s: string) => s === "bb_rsi" ? "text-cyan-300 border-cyan-500/50 bg-cyan-500/10" :
               s === "smc_mss" ? "text-violet-300 border-violet-500/50 bg-violet-500/10" :
-              "text-amber-300 border-amber-500/50 bg-amber-500/10";
+              s === "cht" ? "text-amber-300 border-amber-500/50 bg-amber-500/10" :
+              "text-orange-300 border-orange-500/50 bg-orange-500/10";
 
             // Per-strategy market fit scores for display
             const FIT_TABLE: Record<string, Record<string, number>> = {
-              TRENDING_BULL: { bb_rsi: 20, smc_mss: 100, cht: 85 },
-              TRENDING_BEAR: { bb_rsi: 20, smc_mss: 100, cht: 75 },
-              RANGING:       { bb_rsi: 100, smc_mss: 40, cht: 30 },
-              VOLATILE:      { bb_rsi: 30, smc_mss: 55, cht: 90 },
-              NEUTRAL:       { bb_rsi: 60, smc_mss: 65, cht: 60 },
+              TRENDING_BULL: { bb_rsi: 20, smc_mss: 100, cht: 85, "mrx-hybrid": 30 },
+              TRENDING_BEAR: { bb_rsi: 20, smc_mss: 100, cht: 75, "mrx-hybrid": 10 },
+              RANGING:       { bb_rsi: 100, smc_mss: 40, cht: 30, "mrx-hybrid": 95 },
+              VOLATILE:      { bb_rsi: 30, smc_mss: 55, cht: 90, "mrx-hybrid": 20 },
+              NEUTRAL:       { bb_rsi: 60, smc_mss: 65, cht: 60, "mrx-hybrid": 65 },
             };
             const fitRow = mc ? FIT_TABLE[mc.regime] : null;
 
@@ -741,12 +865,12 @@ export function ScalperPage() {
 
                       {/* Per-strategy fit bars */}
                       {fitRow && (
-                        <div className="mt-2 grid grid-cols-3 gap-1.5">
-                          {(["bb_rsi", "smc_mss", "cht"] as const).map((s) => {
+                        <div className="mt-2 grid grid-cols-4 gap-1.5">
+                          {(["bb_rsi", "smc_mss", "cht", "mrx-hybrid"] as const).map((s) => {
                             const fit = fitRow[s] ?? 50;
                             const isTop = s === mc.favoredStrategy;
-                            const barColor = s === "bb_rsi" ? "bg-cyan-500" : s === "smc_mss" ? "bg-violet-500" : "bg-amber-500";
-                            const labelC = s === "bb_rsi" ? "text-cyan-400" : s === "smc_mss" ? "text-violet-400" : "text-amber-400";
+                            const barColor = s === "bb_rsi" ? "bg-cyan-500" : s === "smc_mss" ? "bg-violet-500" : s === "cht" ? "bg-amber-500" : "bg-orange-500";
+                            const labelC = s === "bb_rsi" ? "text-cyan-400" : s === "smc_mss" ? "text-violet-400" : s === "cht" ? "text-amber-400" : "text-orange-400";
                             return (
                               <div key={s} className={`rounded px-1.5 py-1 ${isTop ? "bg-white/5 border border-white/10" : "bg-black/20"}`}>
                                 <div className={`text-[10px] font-bold ${labelC} mb-0.5`}>{stratLabel(s)}</div>
@@ -877,9 +1001,9 @@ export function ScalperPage() {
             )}
           </span>
           <div className="flex items-center gap-3">
-            {liveScan?.results && liveScan.results.some((r) => r.bbRsi.detected || r.smc.detected || r.cht?.detected) && (
+            {liveScan?.results && liveScan.results.some((r) => r.bbRsi.detected || r.smc.detected || r.cht?.detected || r.mrx?.detected) && (
               <span className="text-xs font-mono text-yellow-400 font-bold animate-pulse">
-                {liveScan.results.filter((r) => r.bbRsi.detected || r.smc.detected || r.cht?.detected).length} SIGNAL{liveScan.results.filter((r) => r.bbRsi.detected || r.smc.detected || r.cht?.detected).length !== 1 ? "S" : ""} ACTIVE
+                {liveScan.results.filter((r) => r.bbRsi.detected || r.smc.detected || r.cht?.detected || r.mrx?.detected).length} SIGNAL{liveScan.results.filter((r) => r.bbRsi.detected || r.smc.detected || r.cht?.detected || r.mrx?.detected).length !== 1 ? "S" : ""} ACTIVE
               </span>
             )}
             {!liveScan?.scannedAt && (
@@ -899,6 +1023,7 @@ export function ScalperPage() {
                   <th className="text-left px-3 py-2 text-cyan-400">BB+RSI</th>
                   <th className="text-left px-3 py-2 text-violet-400">SMC MSS+OB</th>
                   <th className="text-left px-3 py-2 text-amber-400">CHT ENGINE</th>
+                  <th className="text-left px-3 py-2 text-orange-400">MRX</th>
                   <th className="text-left px-3 py-2 text-yellow-400">ACTION</th>
                 </tr>
               </thead>
@@ -906,13 +1031,13 @@ export function ScalperPage() {
                 {liveScan.results
                   .slice()
                   .sort((a, b) => {
-                    const aHit = (a.bbRsi.detected ? 4 : 0) + (a.smc.detected ? 2 : 0) + (a.cht?.detected ? 3 : 0);
-                    const bHit = (b.bbRsi.detected ? 4 : 0) + (b.smc.detected ? 2 : 0) + (b.cht?.detected ? 3 : 0);
+                    const aHit = (a.bbRsi.detected ? 4 : 0) + (a.smc.detected ? 2 : 0) + (a.cht?.detected ? 3 : 0) + (a.mrx?.detected ? 3 : 0);
+                    const bHit = (b.bbRsi.detected ? 4 : 0) + (b.smc.detected ? 2 : 0) + (b.cht?.detected ? 3 : 0) + (b.mrx?.detected ? 3 : 0);
                     return bHit - aHit;
                   })
                   .map((row) => {
-                    const anySignal = row.bbRsi.detected || row.smc.detected || row.cht?.detected;
-                    const multiSignal = [row.bbRsi.detected, row.smc.detected, row.cht?.detected].filter(Boolean).length >= 2;
+                    const anySignal = row.bbRsi.detected || row.smc.detected || row.cht?.detected || row.mrx?.detected;
+                    const multiSignal = [row.bbRsi.detected, row.smc.detected, row.cht?.detected, row.mrx?.detected].filter(Boolean).length >= 2;
                     return (
                       <tr
                         key={row.gateSymbol}
@@ -981,6 +1106,18 @@ export function ScalperPage() {
                             <span className="text-muted-foreground/50">—</span>
                           )}
                         </td>
+                        <td className="px-3 py-2.5 min-w-[110px]">
+                          {row.mrx?.detected ? (
+                            <span className="inline-flex items-center gap-1 font-bold px-2 py-0.5 border text-orange-300 border-orange-500/50 bg-orange-500/15">
+                              <ArrowUpRight className="w-3 h-3" />LONG
+                              {row.mrx.inOB && <span className="font-normal text-[10px] opacity-70 ml-0.5 border border-current/30 px-1">OB</span>}
+                              {row.mrx.rsi != null && <span className="font-normal text-[10px] opacity-60 ml-0.5">RSI {row.mrx.rsi.toFixed(0)}</span>}
+                              {row.mrx.atrPct != null && <span className="font-normal text-[10px] opacity-50">ATR {row.mrx.atrPct.toFixed(2)}%</span>}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground/50">—</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2.5 min-w-[130px]">
                           {(() => {
                             const msg = liveEnterMsg[row.gateSymbol];
@@ -996,6 +1133,7 @@ export function ScalperPage() {
                             if (row.bbRsi.detected && row.bbRsi.side) sides.push(row.bbRsi.side as "buy" | "sell");
                             if (row.smc.detected && row.smc.side && !sides.includes(row.smc.side as "buy" | "sell")) sides.push(row.smc.side as "buy" | "sell");
                             if (row.cht?.detected && row.cht.side && !sides.includes(row.cht.side as "buy" | "sell")) sides.push(row.cht.side as "buy" | "sell");
+                            if (row.mrx?.detected && !sides.includes("buy")) sides.push("buy");
                             if (sides.length === 0) return <span className="text-muted-foreground/30">—</span>;
                             return (
                               <div className="flex flex-col gap-1">
@@ -1185,7 +1323,7 @@ export function ScalperPage() {
         {/* Strategy selector */}
         <div className="p-4 border-b border-border space-y-3">
           <label className="text-xs text-muted-foreground tracking-widest">STRATEGY ENGINE</label>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <button
               onClick={() => set("strategy", "bb_rsi")}
               className={`p-3 text-left border transition-colors ${field("strategy", "bb_rsi") === "bb_rsi" ? "border-primary bg-primary/10" : "border-border bg-secondary/30 hover:border-border/80"}`}
@@ -1207,8 +1345,18 @@ export function ScalperPage() {
               <div className={`text-sm font-bold mb-1 font-mono ${field("strategy", "bb_rsi") === "cht" ? "text-amber-400" : "text-muted-foreground"}`}>CHT Engine</div>
               <div className="text-xs text-muted-foreground leading-relaxed">Crypto Hybrid Trading Intelligence. Trend + MSS + Trigger + HTF + TAO consensus (6 experts). Graded ELITE/STRONG/MEDIUM. TP = 1.5R.</div>
             </button>
+            <button
+              onClick={() => set("strategy", "mrx-hybrid")}
+              className={`p-3 text-left border transition-colors ${field("strategy", "bb_rsi") === "mrx-hybrid" ? "border-orange-500 bg-orange-500/10" : "border-border bg-secondary/30 hover:border-border/80"}`}
+            >
+              <div className={`text-sm font-bold mb-1 font-mono ${field("strategy", "bb_rsi") === "mrx-hybrid" ? "text-orange-400" : "text-muted-foreground"}`}>MRX — Mean Reversion Xpress</div>
+              <div className="text-xs text-muted-foreground leading-relaxed">Oversold snap on 3m candles. 7-gate evaluator (BB lower + RSI ≤ 25 + ATR + BB width + vol spike + HTF EMA + pump guard). LONG ONLY · TP +0.28% · SL −2.5%.</div>
+            </button>
           </div>
         </div>
+
+        {/* MRX Status panel — shown always so the user can see MRX params and auto-pause state */}
+        <MrxStatusPanel />
 
         <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Paper Mode */}
