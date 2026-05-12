@@ -534,7 +534,11 @@ export function ScalperPage() {
   }
 
   const hasDraft = Object.keys(draft).length > 0;
-  const openTrades = openTrades_ ?? [];
+  // Only show error-status trades that have a confirmed entry fill (entryPrice != null).
+  // Error trades with no entryPrice are failed entries — they never opened a real position.
+  const openTrades = (openTrades_ ?? []).filter(
+    (t) => t.status !== "error" || t.entryPrice != null
+  );
   const closedTrades = closedTrades_ ?? [];
 
   // Equity curve from closed trades (sort ascending by close time)
