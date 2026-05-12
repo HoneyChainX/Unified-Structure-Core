@@ -390,7 +390,8 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
     if (result?.filled) {
       const closedSoFar  = Number(trade.closedQty ?? 0);
       const remainingQty = qty - closedSoFar;
-      const slPnlIncrement = (result.price - (entryPrice ?? 0)) * dir * (remainingQty > 0 ? remainingQty : result.qty);
+      const slFillQty    = result.qty > 0 ? result.qty : remainingQty;
+      const slPnlIncrement = (result.price - (entryPrice ?? 0)) * dir * slFillQty;
       const finalPnl     = Number(trade.realizedPnl ?? 0) + slPnlIncrement;
 
       await tryCancel(trade.tp2OrderId, "tp2-after-sl");
