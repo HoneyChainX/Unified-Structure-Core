@@ -142,6 +142,10 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
   // ── Micro $2 mode: auto-size position so 1R = targetProfitUsdt ───────────
   const isMicro = (config as { tpMode?: string }).tpMode === "micro_2usd";
 
+  // ── MRX fixed mode: TP = +0.28%, SL = −2.5% (hardcoded, LONG ONLY) ───────
+  const isMrxFixed = (config as { tpMode?: string }).tpMode === "mrx_fixed"
+    || signal.strategy === "mrx-hybrid";
+
   let quantity: number;
   let microSlDist: number | null = null;
   let microTp1: number | null = null;
@@ -186,7 +190,10 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
   /** Compute TP/SL from a given fill price, honouring signal geometry first, then config. */
   function computeTpSl(fillPrice: number, fillQty: number): { tp: number; sl: number } {
     let tp: number;
-    if (config.dynamicTp) {
+    if (isMrxFixed) {
+      // MRX hardcoded levels — always LONG, TP +0.28%, SL −2.5%
+      tp = fillPrice * 1.0028;
+    } else if (config.dynamicTp) {
       tp = signal.side === "buy" ? signal.bbUpper : signal.bbLower;
     } else if (signal.tpPrice != null) {
       tp = signal.tpPrice;
@@ -199,7 +206,10 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     }
 
     let sl: number;
-    if (signal.slPrice != null) {
+    if (isMrxFixed) {
+      // MRX hardcoded SL −2.5%
+      sl = fillPrice * 0.975;
+    } else if (signal.slPrice != null) {
       sl = signal.slPrice;
     } else {
       const move = fillPrice * (config.slPct / 100);
@@ -426,7 +436,11 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     let actualSl: number;
     let micro2TpPrices: { tp1Price?: number; tp2Price?: number } = {};
 
-    if (isMicro) {
+    if (isMrxFixed) {
+      // MRX fixed — recalculate at actual fill price
+      actualTp = filledPrice * 1.0028;
+      actualSl = filledPrice * 0.975;
+    } else if (isMicro) {
       actualSl = signal.slPrice ?? (filledPrice - dir * actualSlDist);
       const mTp1 = filledPrice + dir * 1.0 * actualSlDist;
       const mTp2 = filledPrice + dir * 2.0 * actualSlDist;

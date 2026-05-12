@@ -559,14 +559,22 @@ export function ScalperPage() {
   const [liveEntering, setLiveEntering] = useState<Record<string, "buy" | "sell" | null>>({});
   const [liveEnterMsg, setLiveEnterMsg] = useState<Record<string, { msg: string; ok: boolean }>>({});
 
-  async function enterFromMonitor(gateSymbol: string, side: "buy" | "sell") {
+  async function enterFromMonitor(
+    gateSymbol: string,
+    side: "buy" | "sell",
+    opts?: { tpPrice?: number | null; slPrice?: number | null; strategy?: string },
+  ) {
     setLiveEntering((p) => ({ ...p, [gateSymbol]: side }));
     setLiveEnterMsg((p) => { const n = { ...p }; delete n[gateSymbol]; return n; });
+    const payload: Record<string, unknown> = { symbol: gateSymbol, side };
+    if (opts?.tpPrice != null) payload["tpPrice"] = opts.tpPrice;
+    if (opts?.slPrice != null) payload["slPrice"] = opts.slPrice;
+    if (opts?.strategy)        payload["strategy"] = opts.strategy;
     try {
       const res = await api("/api/scalper/trade/manual", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol: gateSymbol, side }),
+        body: JSON.stringify(payload),
       });
       const json = res as { trade?: { id: number }; blocked?: string; error?: string };
       if (json.blocked) {
@@ -1130,10 +1138,27 @@ export function ScalperPage() {
                               );
                             }
                             const sides: Array<"buy" | "sell"> = [];
-                            if (row.bbRsi.detected && row.bbRsi.side) sides.push(row.bbRsi.side as "buy" | "sell");
-                            if (row.smc.detected && row.smc.side && !sides.includes(row.smc.side as "buy" | "sell")) sides.push(row.smc.side as "buy" | "sell");
-                            if (row.cht?.detected && row.cht.side && !sides.includes(row.cht.side as "buy" | "sell")) sides.push(row.cht.side as "buy" | "sell");
-                            if (row.mrx?.detected && !sides.includes("buy")) sides.push("buy");
+                            // geometry map: per-side TP/SL/strategy to pass to executor
+                            const geo: Partial<Record<"buy" | "sell", { tpPrice?: number; slPrice?: number; strategy?: string }>> = {};
+                            if (row.bbRsi.detected && row.bbRsi.side) {
+                              const s = row.bbRsi.side as "buy" | "sell";
+                              sides.push(s);
+                              geo[s] = { tpPrice: row.bbRsi.tp ?? undefined, slPrice: row.bbRsi.sl ?? undefined, strategy: "bb_rsi" };
+                            }
+                            if (row.smc.detected && row.smc.side && !sides.includes(row.smc.side as "buy" | "sell")) {
+                              const s = row.smc.side as "buy" | "sell";
+                              sides.push(s);
+                              geo[s] = { tpPrice: row.smc.tp ?? undefined, slPrice: row.smc.sl ?? undefined, strategy: "smc_mss" };
+                            }
+                            if (row.cht?.detected && row.cht.side && !sides.includes(row.cht.side as "buy" | "sell")) {
+                              const s = row.cht.side as "buy" | "sell";
+                              sides.push(s);
+                              geo[s] = { tpPrice: row.cht.tp1 ?? undefined, slPrice: row.cht.sl ?? undefined, strategy: "cht" };
+                            }
+                            if (row.mrx?.detected && !sides.includes("buy")) {
+                              sides.push("buy");
+                              geo["buy"] = { tpPrice: row.mrx.tp ?? undefined, slPrice: row.mrx.sl ?? undefined, strategy: "mrx-hybrid" };
+                            }
                             if (sides.length === 0) return <span className="text-muted-foreground/30">—</span>;
                             return (
                               <div className="flex flex-col gap-1">
@@ -1141,7 +1166,7 @@ export function ScalperPage() {
                                   <button
                                     key={side}
                                     disabled={entering != null}
-                                    onClick={() => enterFromMonitor(row.gateSymbol, side)}
+                                    onClick={() => enterFromMonitor(row.gateSymbol, side, geo[side])}
                                     className={`inline-flex items-center gap-1 px-2 py-0.5 border text-xs font-bold transition-opacity disabled:opacity-50 ${
                                       side === "buy"
                                         ? "border-green-500/70 bg-green-500/20 text-green-300 hover:bg-green-500/35"
