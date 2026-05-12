@@ -31,6 +31,7 @@ import type {
   ListSignalsParams,
   ListTradesParams,
   MarketStatus,
+  ResumeMrxScanner200,
   ScalperConfig,
   ScalperConfigPatch,
   ScalperPerformance,
@@ -1191,6 +1192,87 @@ export function useGetScalperPerformance<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Resume MRX scanner after auto-pause
+ */
+export const getResumeMrxScannerUrl = () => {
+  return `/api/scalper/mrx/resume`;
+};
+
+export const resumeMrxScanner = async (
+  options?: RequestInit,
+): Promise<ResumeMrxScanner200> => {
+  return customFetch<ResumeMrxScanner200>(getResumeMrxScannerUrl(), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getResumeMrxScannerMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resumeMrxScanner>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof resumeMrxScanner>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["resumeMrxScanner"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof resumeMrxScanner>>,
+    void
+  > = () => {
+    return resumeMrxScanner(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ResumeMrxScannerMutationResult = NonNullable<
+  Awaited<ReturnType<typeof resumeMrxScanner>>
+>;
+
+export type ResumeMrxScannerMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Resume MRX scanner after auto-pause
+ */
+export const useResumeMrxScanner = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resumeMrxScanner>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof resumeMrxScanner>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(getResumeMrxScannerMutationOptions(options));
+};
 
 /**
  * @summary Get current market scan results for top 5 USDT symbols

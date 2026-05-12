@@ -270,6 +270,24 @@ paths:
               schema:
                 $ref: "#/components/schemas/ScalperPerformance"
 
+  /scalper/mrx/resume:
+    post:
+      operationId: resumeMrxScanner
+      tags: [scalper]
+      summary: Resume MRX scanner after auto-pause
+      responses:
+        "200":
+          description: Resumed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                required:
+                  - ok
+
   /scalper/scan:
     get:
       operationId: getScalperScan
@@ -1617,11 +1635,117 @@ components:
         worstPnl:
           type: number
           nullable: true
+        strategyStats:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScalperStrategyStat"
+          nullable: true
+        bestModeNow:
+          nullable: true
+          type: object
+          properties:
+            strategy:
+              type: string
+            score:
+              type: number
+            winRate:
+              type: number
+              nullable: true
+            tradeCount:
+              type: integer
+            liveSignals:
+              type: integer
+            totalScanned:
+              type: integer
+            marketFit:
+              type: number
+          required:
+            - strategy
+            - score
+            - tradeCount
+            - liveSignals
+            - totalScanned
+            - marketFit
+        marketCondition:
+          nullable: true
+          type: object
+          properties:
+            regime:
+              type: string
+            adx:
+              type: number
+            atrPct:
+              type: number
+            btcTrend:
+              type: string
+            label:
+              type: string
+            description:
+              type: string
+            favoredStrategy:
+              type: string
+            favoredReason:
+              type: string
+          required:
+            - regime
+            - adx
+            - atrPct
+            - btcTrend
+            - label
+            - description
+            - favoredStrategy
+            - favoredReason
+        mrxStatus:
+          nullable: true
+          $ref: "#/components/schemas/MRXStatus"
       required:
         - totalClosed
         - wins
         - losses
         - totalPnl
+
+    ScalperStrategyStat:
+      type: object
+      properties:
+        strategy:
+          type: string
+        count:
+          type: integer
+        wins:
+          type: integer
+        losses:
+          type: integer
+        winRate:
+          type: number
+          nullable: true
+        totalPnl:
+          type: number
+        avgPnl:
+          type: number
+          nullable: true
+      required:
+        - strategy
+        - count
+        - wins
+        - losses
+        - totalPnl
+
+    MRXStatus:
+      type: object
+      properties:
+        paused:
+          type: boolean
+        winRate:
+          type: number
+          nullable: true
+        tradeCount:
+          type: integer
+        message:
+          type: string
+          nullable: true
+      required:
+        - paused
+        - tradeCount
 
     ScalperScanRow:
       type: object

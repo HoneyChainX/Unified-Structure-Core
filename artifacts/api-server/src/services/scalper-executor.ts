@@ -110,7 +110,18 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
 
   // ── Position sizing ──────────────────────────────────────────────────────
   let positionSize: number;
-  if (config.positionSizePct != null && config.positionSizePct > 0) {
+
+  // MRX-Hybrid always uses 100% of available USDT balance
+  if (signal.strategy === "mrx-hybrid") {
+    try {
+      const liveBalance = await getUsdtBalance();
+      positionSize = liveBalance;
+      logger.debug({ liveBalance }, "MRX: 100% USDT balance position sizing");
+    } catch (err) {
+      logger.warn({ err }, "MRX: balance fetch failed — falling back to positionSizeUsdt");
+      positionSize = config.positionSizeUsdt;
+    }
+  } else if (config.positionSizePct != null && config.positionSizePct > 0) {
     try {
       const liveBalance = await getUsdtBalance();
       positionSize = liveBalance * (config.positionSizePct / 100);

@@ -29,6 +29,7 @@ import {
   CHT_HTF_MAP,
   type CHTMarketContext,
 } from "./scalper-signals-cht";
+import { scanForMRXSignals, evaluateMRXSignal, MRX_STRATEGY_TAG } from "./scalper-signals-mrx";
 import { executeScalperSignal } from "./scalper-executor";
 import { getMarketStatus } from "./market";
 import { logger } from "../lib/logger";
@@ -100,6 +101,15 @@ export interface LiveScanEntry {
     tp3: number | null;
     sl: number | null;
     rr: number | null;
+  };
+  mrx: {
+    detected: boolean;
+    rsi: number | null;
+    atrPct: number | null;
+    volumeRatio: number | null;
+    inOB: boolean;
+    tp: number | null;
+    sl: number | null;
   };
 }
 
@@ -230,6 +240,16 @@ export async function runLiveDualScan(): Promise<void> {
           }
         }
 
+        // MRX: evaluate on 3m/15m/1h candles (all already fetched above)
+        const mrxC3m  = tfMap.get("3m")  ?? [];
+        const mrxC15m = tfMap.get("15m") ?? [];
+        const mrxC1h  = tfMap.get("1h")  ?? [];
+        let mrxDecision: ReturnType<typeof evaluateMRXSignal> | null = null;
+        if (mrxC3m.length >= 30) {
+          mrxDecision = evaluateMRXSignal(sym, mrxC3m, mrxC15m, mrxC1h);
+        }
+        const mrxSig = mrxDecision?.signal ?? null;
+
         return {
           gateSymbol: sym,
           lastClose,
@@ -267,6 +287,15 @@ export async function runLiveDualScan(): Promise<void> {
             sl: chtSig?.slPrice ?? null,
             rr: chtSig?.chtRr ?? null,
           },
+          mrx: {
+            detected: mrxSig != null,
+            rsi: mrxDecision?.decision.rsi ?? null,
+            atrPct: mrxDecision?.decision.atrPct ?? null,
+            volumeRatio: mrxDecision?.decision.volumeRatio ?? null,
+            inOB: mrxDecision?.decision.inOB ?? false,
+            tp: mrxSig?.tpPrice ?? null,
+            sl: mrxSig?.slPrice ?? null,
+          },
         };
       }),
     );
@@ -291,6 +320,7 @@ export async function runLiveDualScan(): Promise<void> {
       bbHits:  scalperLiveScanResults.filter((r) => r.bbRsi.detected).length,
       smcHits: scalperLiveScanResults.filter((r) => r.smc.detected).length,
       chtHits: scalperLiveScanResults.filter((r) => r.cht.detected).length,
+      mrxHits: scalperLiveScanResults.filter((r) => r.mrx.detected).length,
     },
     "Live scan complete (multi-timeframe)",
   );
@@ -350,6 +380,13 @@ export async function runScalperScan(): Promise<void> {
         longOnly: config.longOnly,
         symbols: resolvedSymbols!,
         timeframe: tf,
+      });
+    } else if (strategy === MRX_STRATEGY_TAG) {
+      // MRX always runs on 3m only — skip non-3m execution timeframes
+      if (tf !== "3m") continue;
+      tfSignals = await scanForMRXSignals({
+        symbols: resolvedSymbols!,
+        candleCache: new Map(), // executor cycle has no pre-populated cache here
       });
     } else {
       tfSignals = await scanForSignals({

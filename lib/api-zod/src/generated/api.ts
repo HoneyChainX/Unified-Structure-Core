@@ -409,6 +409,57 @@ export const GetScalperPerformanceResponse = zod.object({
   avgPnl: zod.number().nullish(),
   bestPnl: zod.number().nullish(),
   worstPnl: zod.number().nullish(),
+  strategyStats: zod
+    .array(
+      zod.object({
+        strategy: zod.string(),
+        count: zod.number(),
+        wins: zod.number(),
+        losses: zod.number(),
+        winRate: zod.number().nullish(),
+        totalPnl: zod.number(),
+        avgPnl: zod.number().nullish(),
+      }),
+    )
+    .nullish(),
+  bestModeNow: zod
+    .object({
+      strategy: zod.string(),
+      score: zod.number(),
+      winRate: zod.number().nullish(),
+      tradeCount: zod.number(),
+      liveSignals: zod.number(),
+      totalScanned: zod.number(),
+      marketFit: zod.number(),
+    })
+    .nullish(),
+  marketCondition: zod
+    .object({
+      regime: zod.string(),
+      adx: zod.number(),
+      atrPct: zod.number(),
+      btcTrend: zod.string(),
+      label: zod.string(),
+      description: zod.string(),
+      favoredStrategy: zod.string(),
+      favoredReason: zod.string(),
+    })
+    .nullish(),
+  mrxStatus: zod
+    .object({
+      paused: zod.boolean(),
+      winRate: zod.number().nullish(),
+      tradeCount: zod.number(),
+      message: zod.string().nullish(),
+    })
+    .nullish(),
+});
+
+/**
+ * @summary Resume MRX scanner after auto-pause
+ */
+export const ResumeMrxScannerResponse = zod.object({
+  ok: zod.boolean(),
 });
 
 /**

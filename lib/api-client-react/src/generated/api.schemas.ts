@@ -473,6 +473,44 @@ export interface ScalperTrade {
   closedAt?: string | null;
 }
 
+export type ScalperPerformanceBestModeNow = {
+  strategy: string;
+  score: number;
+  winRate?: number | null;
+  tradeCount: number;
+  liveSignals: number;
+  totalScanned: number;
+  marketFit: number;
+} | null;
+
+export type ScalperPerformanceMarketCondition = {
+  regime: string;
+  adx: number;
+  atrPct: number;
+  btcTrend: string;
+  label: string;
+  description: string;
+  favoredStrategy: string;
+  favoredReason: string;
+} | null;
+
+export interface ScalperStrategyStat {
+  strategy: string;
+  count: number;
+  wins: number;
+  losses: number;
+  winRate?: number | null;
+  totalPnl: number;
+  avgPnl?: number | null;
+}
+
+export interface MRXStatus {
+  paused: boolean;
+  winRate?: number | null;
+  tradeCount: number;
+  message?: string | null;
+}
+
 export interface ScalperPerformance {
   totalClosed: number;
   wins: number;
@@ -482,6 +520,10 @@ export interface ScalperPerformance {
   avgPnl?: number | null;
   bestPnl?: number | null;
   worstPnl?: number | null;
+  strategyStats?: ScalperStrategyStat[] | null;
+  bestModeNow?: ScalperPerformanceBestModeNow;
+  marketCondition?: ScalperPerformanceMarketCondition;
+  mrxStatus?: MRXStatus | null;
 }
 
 export interface ScalperScanRow {
@@ -524,6 +566,10 @@ export type ListScalperTradesParams = {
 };
 
 export type CancelScalperTrade200 = {
+  ok: boolean;
+};
+
+export type ResumeMrxScanner200 = {
   ok: boolean;
 };
 

@@ -8,6 +8,7 @@ import { scalperLoopLastRunAt, scalperLoopLastSignalCount, scalperLiveScanResult
 import { getTopUsdtSymbols, fetchCandles, computeBB, computeRSI, computeVolumeRatio, computeEMA, evaluateSignal } from "../services/scalper-signals";
 import { evaluateSMCSignal } from "../services/scalper-signals-smc";
 import { computeADX, computeATR } from "../services/scalper-signals-cht";
+import { getMrxStatus, resumeMrx } from "../services/scalper-signals-mrx";
 
 const router = Router();
 
@@ -247,7 +248,7 @@ router.get("/performance", async (req, res): Promise<void> => {
     btcTrend: "BULLISH" | "BEARISH" | "NEUTRAL";
     label: string;
     description: string;
-    favoredStrategy: "bb_rsi" | "smc_mss" | "cht";
+    favoredStrategy: "bb_rsi" | "smc_mss" | "cht" | "mrx-hybrid";
     favoredReason: string;
   }
 
@@ -280,12 +281,13 @@ router.get("/performance", async (req, res): Promise<void> => {
       }
 
       // Strategy fit per regime (0–1)
-      const REGIME_FIT: Record<Regime, Record<"bb_rsi" | "smc_mss" | "cht", number>> = {
-        TRENDING_BULL: { bb_rsi: 0.20, smc_mss: 1.00, cht: 0.85 },
-        TRENDING_BEAR: { bb_rsi: 0.20, smc_mss: 1.00, cht: 0.75 },
-        RANGING:       { bb_rsi: 1.00, smc_mss: 0.40, cht: 0.30 },
-        VOLATILE:      { bb_rsi: 0.30, smc_mss: 0.55, cht: 0.90 },
-        NEUTRAL:       { bb_rsi: 0.60, smc_mss: 0.65, cht: 0.60 },
+      // MRX is a mean-reversion strategy: thrives in RANGING, suffers in trends
+      const REGIME_FIT: Record<Regime, Record<"bb_rsi" | "smc_mss" | "cht" | "mrx-hybrid", number>> = {
+        TRENDING_BULL: { bb_rsi: 0.20, smc_mss: 1.00, cht: 0.85, "mrx-hybrid": 0.30 },
+        TRENDING_BEAR: { bb_rsi: 0.20, smc_mss: 1.00, cht: 0.75, "mrx-hybrid": 0.10 },
+        RANGING:       { bb_rsi: 1.00, smc_mss: 0.40, cht: 0.30, "mrx-hybrid": 0.95 },
+        VOLATILE:      { bb_rsi: 0.30, smc_mss: 0.55, cht: 0.90, "mrx-hybrid": 0.20 },
+        NEUTRAL:       { bb_rsi: 0.60, smc_mss: 0.65, cht: 0.60, "mrx-hybrid": 0.65 },
       };
 
       const fit = REGIME_FIT[regime];
@@ -308,31 +310,36 @@ router.get("/performance", async (req, res): Promise<void> => {
         NEUTRAL:       `BTC neutral — ADX ${adx.toFixed(0)}, trend unclear`,
       };
 
-      const FAVORED_REASON: Record<Regime, Record<"bb_rsi" | "smc_mss" | "cht", string>> = {
+      const FAVORED_REASON: Record<Regime, Record<"bb_rsi" | "smc_mss" | "cht" | "mrx-hybrid", string>> = {
         TRENDING_BULL: {
-          bb_rsi:  "Mean reversion underperforms in trends",
-          smc_mss: "Structure breaks & retests thrive in uptrends",
-          cht:     "11-stage trend confirmation suits directional moves",
+          bb_rsi:        "Mean reversion underperforms in trends",
+          smc_mss:       "Structure breaks & retests thrive in uptrends",
+          cht:           "11-stage trend confirmation suits directional moves",
+          "mrx-hybrid":  "Trending market limits mean-reversion snap opportunity",
         },
         TRENDING_BEAR: {
-          bb_rsi:  "Mean reversion underperforms in downtrends",
-          smc_mss: "Bearish MSS breakdowns excel in trending down markets",
-          cht:     "CHT trend engine aligned bearish; good structural setups",
+          bb_rsi:        "Mean reversion underperforms in downtrends",
+          smc_mss:       "Bearish MSS breakdowns excel in trending down markets",
+          cht:           "CHT trend engine aligned bearish; good structural setups",
+          "mrx-hybrid":  "Long-only MRX unfavorable in bearish trend — SL risk high",
         },
         RANGING: {
-          bb_rsi:  "Price bounces BB extremes when market oscillates",
-          smc_mss: "Structure breaks often fail in ranging conditions",
-          cht:     "CHT ADX filter blocks most signals in ranging markets",
+          bb_rsi:        "Price bounces BB extremes when market oscillates",
+          smc_mss:       "Structure breaks often fail in ranging conditions",
+          cht:           "CHT ADX filter blocks most signals in ranging markets",
+          "mrx-hybrid":  "MRX oversold snaps excel when price coils in BB — ideal regime",
         },
         VOLATILE: {
-          bb_rsi:  "Wide bands reduce signal clarity in volatile conditions",
-          smc_mss: "Structure levels can break false in high-volatility",
-          cht:     "ATR-gated engine filters noise and selects clean setups",
+          bb_rsi:        "Wide bands reduce signal clarity in volatile conditions",
+          smc_mss:       "Structure levels can break false in high-volatility",
+          cht:           "ATR-gated engine filters noise and selects clean setups",
+          "mrx-hybrid":  "High volatility blows past −2.5% SL — MRX sidelined",
         },
         NEUTRAL: {
-          bb_rsi:  "Moderate mean-reversion opportunity in neutral market",
-          smc_mss: "Structural signals remain valid in neutral conditions",
-          cht:     "CHT consensus engine adapts to mixed conditions",
+          bb_rsi:        "Moderate mean-reversion opportunity in neutral market",
+          smc_mss:       "Structural signals remain valid in neutral conditions",
+          cht:           "CHT consensus engine adapts to mixed conditions",
+          "mrx-hybrid":  "Neutral chop with RSI extremes creates reliable MRX setups",
         },
       };
 
@@ -355,27 +362,29 @@ router.get("/performance", async (req, res): Promise<void> => {
   const live = scalperLiveScanResults;
   const totalScanned = live.length;
   const liveHits = {
-    bb_rsi:  live.filter((r) => r.bbRsi.detected).length,
-    smc_mss: live.filter((r) => r.smc.detected).length,
-    cht:     live.filter((r) => r.cht.detected).length,
+    bb_rsi:         live.filter((r) => r.bbRsi.detected).length,
+    smc_mss:        live.filter((r) => r.smc.detected).length,
+    cht:            live.filter((r) => r.cht.detected).length,
+    "mrx-hybrid":   live.filter((r) => r.mrx.detected).length,
   };
 
   // Regime fit lookup (default 0.5 if no condition data)
-  const REGIME_FIT_DEFAULT = { bb_rsi: 0.5, smc_mss: 0.5, cht: 0.5 };
-  const regimeFit = marketCondition
+  type StratKey = "bb_rsi" | "smc_mss" | "cht" | "mrx-hybrid";
+  const REGIME_FIT_DEFAULT: Record<StratKey, number> = { bb_rsi: 0.5, smc_mss: 0.5, cht: 0.5, "mrx-hybrid": 0.5 };
+  const regimeFit: Record<StratKey, number> = marketCondition
     ? (() => {
-        const REGIME_FIT: Record<string, Record<"bb_rsi" | "smc_mss" | "cht", number>> = {
-          TRENDING_BULL: { bb_rsi: 0.20, smc_mss: 1.00, cht: 0.85 },
-          TRENDING_BEAR: { bb_rsi: 0.20, smc_mss: 1.00, cht: 0.75 },
-          RANGING:       { bb_rsi: 1.00, smc_mss: 0.40, cht: 0.30 },
-          VOLATILE:      { bb_rsi: 0.30, smc_mss: 0.55, cht: 0.90 },
-          NEUTRAL:       { bb_rsi: 0.60, smc_mss: 0.65, cht: 0.60 },
+        const REGIME_FIT: Record<string, Record<StratKey, number>> = {
+          TRENDING_BULL: { bb_rsi: 0.20, smc_mss: 1.00, cht: 0.85, "mrx-hybrid": 0.30 },
+          TRENDING_BEAR: { bb_rsi: 0.20, smc_mss: 1.00, cht: 0.75, "mrx-hybrid": 0.10 },
+          RANGING:       { bb_rsi: 1.00, smc_mss: 0.40, cht: 0.30, "mrx-hybrid": 0.95 },
+          VOLATILE:      { bb_rsi: 0.30, smc_mss: 0.55, cht: 0.90, "mrx-hybrid": 0.20 },
+          NEUTRAL:       { bb_rsi: 0.60, smc_mss: 0.65, cht: 0.60, "mrx-hybrid": 0.65 },
         };
-        return REGIME_FIT[marketCondition.regime] ?? REGIME_FIT_DEFAULT;
+        return (REGIME_FIT[marketCondition.regime] ?? REGIME_FIT_DEFAULT) as Record<StratKey, number>;
       })()
     : REGIME_FIT_DEFAULT;
 
-  const ALL_STRATEGIES = ["bb_rsi", "smc_mss", "cht"] as const;
+  const ALL_STRATEGIES: StratKey[] = ["bb_rsi", "smc_mss", "cht", "mrx-hybrid"];
   const bestModeScores = ALL_STRATEGIES.map((strat) => {
     const hist = byStrategy[strat];
     const histWr = hist ? hist.wins / hist.count : 0;
@@ -399,6 +408,9 @@ router.get("/performance", async (req, res): Promise<void> => {
 
   const bestModeNow = bestModeScores[0]?.score > 0 ? bestModeScores[0] : null;
 
+  // MRX status (auto-pause + WR monitor state)
+  const mrxStatus = getMrxStatus();
+
   res.json({
     totalClosed: closed.length,
     withPnl: withPnl.length,
@@ -412,7 +424,14 @@ router.get("/performance", async (req, res): Promise<void> => {
     strategyStats,
     bestModeNow,
     marketCondition,
+    mrxStatus,
   });
+});
+
+// ── MRX resume (clear auto-pause) ─────────────────────────────────────────────
+router.post("/mrx/resume", (_req, res): void => {
+  resumeMrx();
+  res.json({ ok: true });
 });
 
 // ── Live dual-strategy scan results ──────────────────────────────────────

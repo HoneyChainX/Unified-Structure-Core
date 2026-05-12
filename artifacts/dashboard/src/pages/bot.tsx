@@ -9,12 +9,15 @@ import {
   useSendTestSignal,
   useGetEquityCurve,
   useGetMarketStatus,
+  useGetScalperPerformance,
+  useResumeMrxScanner,
   getGetBotConfigQueryKey,
   getGetBotStatusQueryKey,
   getListTradesQueryKey,
   getGetBotPerformanceQueryKey,
   getGetEquityCurveQueryKey,
   getGetMarketStatusQueryKey,
+  getGetScalperPerformanceQueryKey,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -378,10 +381,14 @@ export function BotPage() {
   const { data: equityCurve, refetch: refetchEquity } = useGetEquityCurve({
     query: { queryKey: getGetEquityCurveQueryKey(), refetchInterval: 30000 }
   });
+  const { data: scalerPerf, refetch: refetchScalerPerf } = useGetScalperPerformance({
+    query: { queryKey: getGetScalperPerformanceQueryKey(), refetchInterval: 30000 }
+  });
 
   const updateMutation = useUpdateBotConfig();
   const cancelMutation = useCancelTrade();
   const testSignalMutation = useSendTestSignal();
+  const resumeMrxMutation = useResumeMrxScanner();
 
   const [form, setForm] = useState<Record<string, unknown> | null>(null);
   const [saving, setSaving] = useState(false);
@@ -430,6 +437,7 @@ export function BotPage() {
     refetchTrades();
     refetchPerf();
     refetchEquity();
+    refetchScalerPerf();
   }
 
   async function fireTestSignal() {
@@ -440,6 +448,7 @@ export function BotPage() {
         refetchTrades();
         refetchPerf();
         refetchEquity();
+        refetchScalerPerf();
         queryClient.invalidateQueries({ queryKey: getGetBotStatusQueryKey() });
       }, 1500);
     } finally {
@@ -601,6 +610,123 @@ export function BotPage() {
               <div className="text-xl font-bold font-mono text-red-400">
                 {perf.worstTrade != null ? perf.worstTrade.toFixed(4) : "—"}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MRX Auto-pause Banner */}
+      {scalerPerf?.mrxStatus?.paused && (
+        <div className="flex items-start gap-3 border border-orange-500/40 bg-orange-500/10 px-4 py-3 text-sm text-orange-300">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-orange-400" />
+          <div className="flex-1">
+            <div className="font-bold mb-0.5 text-orange-300">MRX Scanner Auto-Paused</div>
+            <div className="text-xs text-orange-400/80">
+              {scalerPerf.mrxStatus.message ??
+                `Rolling win rate ${scalerPerf.mrxStatus.winRate != null ? `${(scalerPerf.mrxStatus.winRate * 100).toFixed(1)}%` : "?"} fell below 70% threshold over the last ${scalerPerf.mrxStatus.tradeCount} trades. MRX signals are suppressed until manually resumed.`}
+            </div>
+          </div>
+          <button
+            onClick={async () => {
+              await resumeMrxMutation.mutateAsync();
+              refetchScalerPerf();
+            }}
+            disabled={resumeMrxMutation.isPending}
+            className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 border border-orange-500/50 text-orange-300 bg-orange-500/20 hover:bg-orange-500/30 text-xs font-bold tracking-widest disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <PlayCircle className="w-3.5 h-3.5" />
+            {resumeMrxMutation.isPending ? "..." : "RESUME"}
+          </button>
+        </div>
+      )}
+
+      {/* BY STRATEGY — scalper trade breakdown */}
+      {scalerPerf && (scalerPerf.strategyStats ?? []).length > 0 && (
+        <div className="border border-border bg-card">
+          <div className="px-4 py-3 border-b border-border bg-secondary/30 flex items-center gap-2">
+            <Layers className="w-3.5 h-3.5 text-primary" />
+            <span className="text-xs text-muted-foreground tracking-widest font-bold">SCALPER BY STRATEGY</span>
+            {scalerPerf.mrxStatus && !scalerPerf.mrxStatus.paused && (
+              <span className="ml-auto text-xs text-muted-foreground font-mono">
+                MRX {scalerPerf.mrxStatus.tradeCount > 0
+                  ? `WR: ${scalerPerf.mrxStatus.winRate != null ? `${(scalerPerf.mrxStatus.winRate * 100).toFixed(1)}%` : "—"} / ${scalerPerf.mrxStatus.tradeCount} trades`
+                  : "monitoring"}
+              </span>
+            )}
+          </div>
+          <div className="p-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {(scalerPerf.strategyStats ?? []).map((s) => {
+                const isMrx = s.strategy === "mrx-hybrid";
+                const mrxPaused = isMrx && scalerPerf.mrxStatus?.paused;
+                const wr = s.winRate;
+                const wrGood = wr != null && wr >= 50;
+                const stratLabel: Record<string, string> = {
+                  "bb_rsi":     "BB+RSI",
+                  "smc_mss":    "SMC MSS",
+                  "cht":        "CHT",
+                  "mrx-hybrid": "MRX",
+                };
+                const stratColor: Record<string, string> = {
+                  "bb_rsi":     "border-blue-500/30 bg-blue-500/5",
+                  "smc_mss":    "border-purple-500/30 bg-purple-500/5",
+                  "cht":        "border-cyan-500/30 bg-cyan-500/5",
+                  "mrx-hybrid": "border-orange-500/30 bg-orange-500/5",
+                };
+                const stratAccent: Record<string, string> = {
+                  "bb_rsi":     "text-blue-400",
+                  "smc_mss":    "text-purple-400",
+                  "cht":        "text-cyan-400",
+                  "mrx-hybrid": "text-orange-400",
+                };
+                return (
+                  <div
+                    key={s.strategy}
+                    className={`border p-3 space-y-2 relative ${stratColor[s.strategy] ?? "border-border bg-card/50"}`}
+                  >
+                    {mrxPaused && (
+                      <div className="absolute top-1.5 right-1.5">
+                        <span className="text-[10px] px-1 py-0.5 bg-orange-500/20 border border-orange-500/40 text-orange-400 font-bold tracking-widest">PAUSED</span>
+                      </div>
+                    )}
+                    <div className={`text-xs font-bold tracking-widest ${stratAccent[s.strategy] ?? "text-primary"}`}>
+                      {stratLabel[s.strategy] ?? s.strategy.toUpperCase()}
+                    </div>
+                    <div className={`text-2xl font-bold font-mono ${wr != null ? (wrGood ? "text-green-400" : "text-red-400") : "text-muted-foreground"}`}>
+                      {wr != null ? `${wr.toFixed(1)}%` : "—"}
+                    </div>
+                    <div className="text-xs text-muted-foreground space-y-0.5">
+                      <div className="flex justify-between">
+                        <span>Trades</span>
+                        <span className="font-mono text-foreground">{s.count}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>W/L</span>
+                        <span className="font-mono"><span className="text-green-400">{s.wins}</span>/<span className="text-red-400">{s.losses}</span></span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>P&L</span>
+                        <span className={`font-mono font-bold ${s.totalPnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+                          {s.totalPnl >= 0 ? "+" : ""}{s.totalPnl.toFixed(3)}
+                        </span>
+                      </div>
+                      {s.avgPnl != null && (
+                        <div className="flex justify-between">
+                          <span>Avg</span>
+                          <span className={`font-mono ${s.avgPnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+                            {s.avgPnl >= 0 ? "+" : ""}{s.avgPnl.toFixed(3)}
+                          </span>
+                        </div>
+                      )}
+                      {isMrx && !mrxPaused && (
+                        <div className="pt-1 border-t border-border/50 text-[10px] text-muted-foreground">
+                          TP +{(0.28).toFixed(2)}% · SL −{(2.5).toFixed(1)}% · 3m · LONG ONLY
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

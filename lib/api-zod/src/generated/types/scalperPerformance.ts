@@ -5,6 +5,10 @@
  * Trading Signal Dashboard API
  * OpenAPI spec version: 0.1.0
  */
+import type { MRXStatus } from "./mRXStatus";
+import type { ScalperPerformanceBestModeNow } from "./scalperPerformanceBestModeNow";
+import type { ScalperPerformanceMarketCondition } from "./scalperPerformanceMarketCondition";
+import type { ScalperStrategyStat } from "./scalperStrategyStat";
 
 export interface ScalperPerformance {
   totalClosed: number;
@@ -15,4 +19,8 @@ export interface ScalperPerformance {
   avgPnl?: number | null;
   bestPnl?: number | null;
   worstPnl?: number | null;
+  strategyStats?: ScalperStrategyStat[] | null;
+  bestModeNow?: ScalperPerformanceBestModeNow;
+  marketCondition?: ScalperPerformanceMarketCondition;
+  mrxStatus?: MRXStatus | null;
 }
