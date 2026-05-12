@@ -46,7 +46,7 @@ async function getAvailableBase(gateSymbol: string): Promise<number> {
  * Fetches the configurable stop-limit SL offset percentage from the DB config.
  * Falls back to 0.2% if config is unavailable.
  */
-async function getSlLimitOffsetPct(): Promise<number> {
+export async function getSlLimitOffsetPct(): Promise<number> {
   try {
     const [cfg] = await db.select({ v: scalperConfigTable.slLimitOffsetPct }).from(scalperConfigTable).limit(1);
     return cfg?.v ?? 0.2;
@@ -61,7 +61,7 @@ async function getSlLimitOffsetPct(): Promise<number> {
  * Long (buy side): limit = trigger * (1 - offset) — slightly below trigger
  * Short (sell side): limit = trigger * (1 + offset) — slightly above trigger
  */
-function computeSlLimitPrice(trigger: number, side: string, offsetPct: number): number {
+export function computeSlLimitPrice(trigger: number, side: string, offsetPct: number): number {
   const f = offsetPct / 100;
   return side === "buy" ? trigger * (1 - f) : trigger * (1 + f);
 }

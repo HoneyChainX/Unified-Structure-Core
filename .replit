@@ -41,3 +41,8 @@ externalPort = 3000
 
 [nix]
 channel = "stable-25_05"
+
+[userenv]
+
+[userenv.development]
+DRY_RUN_ENABLED = "true"
