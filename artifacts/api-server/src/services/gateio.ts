@@ -21,7 +21,8 @@ async function request<T>(
   method: string,
   path: string,
   params?: Record<string, string>,
-  body?: unknown
+  body?: unknown,
+  _retries = 0
 ): Promise<T> {
   const apiKey = process.env.GATEIO_API_KEY ?? "";
   const timestamp = Math.floor(Date.now() / 1000).toString();
@@ -47,6 +48,12 @@ async function request<T>(
   });
 
   const text = await res.text();
+
+  if (res.status === 429 && _retries < 3) {
+    const delay = Math.min(1000 * Math.pow(2, _retries), 8000);
+    await new Promise<void>((r) => setTimeout(r, delay));
+    return request(method, path, params, body, _retries + 1);
+  }
 
   if (!res.ok) {
     logger.error({ status: res.status, body: text, path }, "Gate.io API error");
@@ -254,7 +261,7 @@ export function fmtGateAmount(amount: number): string {
 // Gate.io exposes per-pair `precision` (price decimal places) and
 // `amount_precision` (base-amount decimal places) via a public REST endpoint.
 // Results are cached for the lifetime of the server process.
-interface GatePairInfo { precision: number; amount_precision: number; }
+interface GatePairInfo { precision: number; amount_precision: number; minBaseAmount: number; }
 const pairInfoCache = new Map<string, GatePairInfo>();
 
 async function fetchPairInfo(currencyPair: string): Promise<GatePairInfo> {
@@ -262,10 +269,23 @@ async function fetchPairInfo(currencyPair: string): Promise<GatePairInfo> {
   if (cached) return cached;
   const res = await fetch(`${BASE}${API_PATH_PREFIX}/spot/currency_pairs/${currencyPair}`);
   if (!res.ok) throw new Error(`Pair info fetch failed: ${res.status}`);
-  const data = await res.json() as { precision: number; amount_precision: number };
-  const info: GatePairInfo = { precision: data.precision, amount_precision: data.amount_precision };
+  const data = await res.json() as { precision: number; amount_precision: number; min_base_amount?: string };
+  const info: GatePairInfo = {
+    precision: data.precision,
+    amount_precision: data.amount_precision,
+    minBaseAmount: data.min_base_amount ? parseFloat(data.min_base_amount) : 0,
+  };
   pairInfoCache.set(currencyPair, info);
   return info;
+}
+
+export async function getMinBaseAmount(currencyPair: string): Promise<number> {
+  try {
+    const info = await fetchPairInfo(currencyPair);
+    return info.minBaseAmount;
+  } catch {
+    return 0;
+  }
 }
 
 /**

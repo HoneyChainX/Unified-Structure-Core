@@ -74,7 +74,23 @@ export async function getTopUsdtSymbols(n = 5): Promise<string[]> {
     .map((t) => t.currency_pair);
 }
 
+// ── Cycle-scoped candle cache (populated by live scan, consumed by exec scan) ──
+const _cycleCache = new Map<string, Candle[]>();
+
+export function injectCandleCache(map: Map<string, Candle[]>): void {
+  _cycleCache.clear();
+  for (const [k, v] of map) _cycleCache.set(k, v);
+}
+
+export function clearCandleCache(): void {
+  _cycleCache.clear();
+}
+
 export async function fetchCandles(gateSymbol: string, interval = "5m", limit = CANDLE_LIMIT): Promise<Candle[]> {
+  const cacheKey = `${gateSymbol}:${interval}`;
+  const cached = _cycleCache.get(cacheKey);
+  if (cached) return cached;
+
   const url = `${GATE_BASE}/spot/candlesticks?currency_pair=${gateSymbol}&interval=${interval}&limit=${limit}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Gate.io candles error for ${gateSymbol}: ${res.status}`);

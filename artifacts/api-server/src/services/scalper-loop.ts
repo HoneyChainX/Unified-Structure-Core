@@ -17,6 +17,8 @@ import {
   fetchCandles,
   evaluateSignal,
   getTopUsdtSymbols,
+  injectCandleCache,
+  clearCandleCache,
   type Candle,
   type ScalperSignal,
 } from "./scalper-signals";
@@ -157,108 +159,122 @@ export async function runLiveDualScan(): Promise<void> {
     mktCtx = { btcD: s.btcDominance, othersD: s.othersDominance, stableD: s.stableDominance };
   } catch {}
 
-  // Process every symbol: fetch all 6 TF candles in parallel, then evaluate
-  const settled = await Promise.allSettled(
-    symbols.map(async (sym): Promise<LiveScanEntry | null> => {
-      const tfResults = await Promise.allSettled(
-        (ALL_LIVE_TFS as readonly string[]).map(async (tf) => ({
-          tf,
-          candles: await fetchCandles(sym, tf, CANDLE_COUNTS[tf]!),
-        })),
-      );
+  // Process symbols in batches of 4 to limit concurrency, and populate candle cache
+  const LIVE_BATCH_SIZE = 4;
+  const masterCandleCache = new Map<string, Candle[]>();
+  const settled: PromiseSettledResult<LiveScanEntry | null>[] = [];
 
-      const tfMap = new Map<string, Candle[]>();
-      for (const r of tfResults) {
-        if (r.status === "fulfilled") tfMap.set(r.value.tf, r.value.candles);
-      }
+  for (let i = 0; i < symbols.length; i += LIVE_BATCH_SIZE) {
+    const batch = symbols.slice(i, i + LIVE_BATCH_SIZE);
+    const batchResults = await Promise.allSettled(
+      batch.map(async (sym): Promise<LiveScanEntry | null> => {
+        const tfResults = await Promise.allSettled(
+          (ALL_LIVE_TFS as readonly string[]).map(async (tf) => ({
+            tf,
+            candles: await fetchCandles(sym, tf, CANDLE_COUNTS[tf]!),
+          })),
+        );
 
-      // Display price from the smallest available TF
-      const priceCandles = tfMap.get("5m") ?? tfMap.get("3m") ?? tfMap.get("15m");
-      const lastClose = priceCandles?.at(-1)?.close ?? 0;
-      if (lastClose === 0) return null;
-
-      // Scan all TFs for each strategy.
-      // BB+RSI / SMC: first (smallest) TF that fires wins.
-      // CHT: keep the TF with the highest opportunity score.
-      let bbRsiSig: ScalperSignal | null = null;
-      let bbRsiTf: string | null = null;
-      let smcSig: ScalperSignal | null = null;
-      let smcTf: string | null = null;
-      let chtSig: ScalperSignal | null = null;
-      let chtTf: string | null = null;
-
-      for (const tf of ALL_LIVE_TFS) {
-        const ltf = tfMap.get(tf);
-        if (!ltf || ltf.length < 20) continue;
-
-        if (!bbRsiSig) {
-          const sig = evaluateSignal(sym, ltf, bbParams);
-          if (sig) { bbRsiSig = sig; bbRsiTf = tf; }
+        const tfMap = new Map<string, Candle[]>();
+        for (const r of tfResults) {
+          if (r.status === "fulfilled") {
+            tfMap.set(r.value.tf, r.value.candles);
+            masterCandleCache.set(`${sym}:${r.value.tf}`, r.value.candles);
+          }
         }
 
-        if (!smcSig) {
-          const sig = evaluateSMCSignal(sym, ltf, { longOnly });
-          if (sig) { smcSig = sig; smcTf = tf; }
-        }
+        // Display price from the smallest available TF
+        const priceCandles = tfMap.get("5m") ?? tfMap.get("3m") ?? tfMap.get("15m");
+        const lastClose = priceCandles?.at(-1)?.close ?? 0;
+        if (lastClose === 0) return null;
 
-        const chtHtf = CHT_HTF_MAP[tf] ?? null;
-        if (chtHtf) {
-          const htf = tfMap.get(chtHtf);
-          const btcRef = btcRefMap.get(tf) ?? [];
-          if (htf && htf.length >= 55) {
-            const sig = evaluateCHTSignal(sym, ltf, htf, btcRef, {
-              longOnly,
-              marketContext: mktCtx,
-              timeframe: tf,
-            });
-            if (sig && (!chtSig || (sig.chtScore ?? 0) > (chtSig.chtScore ?? 0))) {
-              chtSig = sig;
-              chtTf = tf;
+        // Scan all TFs for each strategy.
+        // BB+RSI / SMC: first (smallest) TF that fires wins.
+        // CHT: keep the TF with the highest opportunity score.
+        let bbRsiSig: ScalperSignal | null = null;
+        let bbRsiTf: string | null = null;
+        let smcSig: ScalperSignal | null = null;
+        let smcTf: string | null = null;
+        let chtSig: ScalperSignal | null = null;
+        let chtTf: string | null = null;
+
+        for (const tf of ALL_LIVE_TFS) {
+          const ltf = tfMap.get(tf);
+          if (!ltf || ltf.length < 20) continue;
+
+          if (!bbRsiSig) {
+            const sig = evaluateSignal(sym, ltf, bbParams);
+            if (sig) { bbRsiSig = sig; bbRsiTf = tf; }
+          }
+
+          if (!smcSig) {
+            const sig = evaluateSMCSignal(sym, ltf, { longOnly });
+            if (sig) { smcSig = sig; smcTf = tf; }
+          }
+
+          const chtHtf = CHT_HTF_MAP[tf] ?? null;
+          if (chtHtf) {
+            const htf = tfMap.get(chtHtf);
+            const btcRef = btcRefMap.get(tf) ?? [];
+            if (htf && htf.length >= 55) {
+              const sig = evaluateCHTSignal(sym, ltf, htf, btcRef, {
+                longOnly,
+                marketContext: mktCtx,
+                timeframe: tf,
+              });
+              if (sig && (!chtSig || (sig.chtScore ?? 0) > (chtSig.chtScore ?? 0))) {
+                chtSig = sig;
+                chtTf = tf;
+              }
             }
           }
         }
-      }
 
-      return {
-        gateSymbol: sym,
-        lastClose,
-        inAllowlist: allowlistSet.size > 0 ? allowlistSet.has(sym) : false,
-        bbRsi: {
-          detected: bbRsiSig != null,
-          side: bbRsiSig?.side ?? null,
-          timeframe: bbRsiTf,
-          rsi: bbRsiSig?.rsi ?? null,
-          volumeRatio: bbRsiSig?.volumeRatio ?? null,
-          tp: bbRsiSig?.tpPrice ?? null,
-          sl: bbRsiSig?.slPrice ?? null,
-        },
-        smc: {
-          detected: smcSig != null,
-          side: smcSig?.side ?? null,
-          timeframe: smcTf,
-          tp: smcSig?.tpPrice ?? null,
-          sl: smcSig?.slPrice ?? null,
-          obHigh: smcSig?.bbUpper ?? null,
-          obLow: smcSig?.bbLower ?? null,
-          mssLevel: smcSig?.bbMid ?? null,
-        },
-        cht: {
-          detected: chtSig != null,
-          side: chtSig?.side ?? null,
-          timeframe: chtTf,
-          score: chtSig?.chtScore ?? null,
-          grade: chtSig?.chtGrade ?? null,
-          setupType: chtSig?.chtSetupType ?? null,
-          taoVotes: chtSig?.chtTaoVotes ?? null,
-          tp1: chtSig?.tp1Price ?? null,
-          tp2: chtSig?.tp2Price ?? null,
-          tp3: chtSig?.tp3Price ?? null,
-          sl: chtSig?.slPrice ?? null,
-          rr: chtSig?.chtRr ?? null,
-        },
-      };
-    }),
-  );
+        return {
+          gateSymbol: sym,
+          lastClose,
+          inAllowlist: allowlistSet.size > 0 ? allowlistSet.has(sym) : false,
+          bbRsi: {
+            detected: bbRsiSig != null,
+            side: bbRsiSig?.side ?? null,
+            timeframe: bbRsiTf,
+            rsi: bbRsiSig?.rsi ?? null,
+            volumeRatio: bbRsiSig?.volumeRatio ?? null,
+            tp: bbRsiSig?.tpPrice ?? null,
+            sl: bbRsiSig?.slPrice ?? null,
+          },
+          smc: {
+            detected: smcSig != null,
+            side: smcSig?.side ?? null,
+            timeframe: smcTf,
+            tp: smcSig?.tpPrice ?? null,
+            sl: smcSig?.slPrice ?? null,
+            obHigh: smcSig?.bbUpper ?? null,
+            obLow: smcSig?.bbLower ?? null,
+            mssLevel: smcSig?.bbMid ?? null,
+          },
+          cht: {
+            detected: chtSig != null,
+            side: chtSig?.side ?? null,
+            timeframe: chtTf,
+            score: chtSig?.chtScore ?? null,
+            grade: chtSig?.chtGrade ?? null,
+            setupType: chtSig?.chtSetupType ?? null,
+            taoVotes: chtSig?.chtTaoVotes ?? null,
+            tp1: chtSig?.tp1Price ?? null,
+            tp2: chtSig?.tp2Price ?? null,
+            tp3: chtSig?.tp3Price ?? null,
+            sl: chtSig?.slPrice ?? null,
+            rr: chtSig?.chtRr ?? null,
+          },
+        };
+      }),
+    );
+    settled.push(...batchResults);
+  }
+
+  // Inject collected candles so the exec scan can reuse them without re-fetching
+  injectCandleCache(masterCandleCache);
 
   scalperLiveScanResults = settled
     .filter(
@@ -391,13 +407,19 @@ export function startScalperLoop(intervalMs = 2.5 * 60_000): void {
   if (scalperLoopInterval) return;
 
   setTimeout(() => {
-    runLiveDualScan().catch((err) => logger.error({ err }, "Scalper loop: initial dual scan failed"));
-    runScalperScan().catch((err) => logger.error({ err }, "Scalper loop: initial scan failed"));
+    void (async () => {
+      await runLiveDualScan().catch((err) => logger.error({ err }, "Scalper loop: initial dual scan failed"));
+      await runScalperScan().catch((err) => logger.error({ err }, "Scalper loop: initial scan failed"));
+      clearCandleCache();
+    })();
   }, 10_000);
 
   scalperLoopInterval = setInterval(() => {
-    runLiveDualScan().catch((err) => logger.error({ err }, "Scalper loop: dual scan failed"));
-    runScalperScan().catch((err) => logger.error({ err }, "Scalper loop: interval scan failed"));
+    void (async () => {
+      await runLiveDualScan().catch((err) => logger.error({ err }, "Scalper loop: dual scan failed"));
+      await runScalperScan().catch((err) => logger.error({ err }, "Scalper loop: interval scan failed"));
+      clearCandleCache();
+    })();
   }, intervalMs);
 
   logger.info({ intervalMs }, "Scalper scan loop started");

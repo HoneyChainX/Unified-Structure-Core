@@ -19,6 +19,7 @@ import {
   placeSpotOrder,
   placePriceTriggeredOrder,
   fmtForPair,
+  getMinBaseAmount,
 } from "./gateio";
 import type { ScalperSignal } from "./scalper-signals";
 import { logger } from "../lib/logger";
@@ -340,6 +341,15 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       signal.side === "buy"
         ? positionSize.toString()
         : (positionSize / livePrice).toFixed(6);
+
+    // ── B1: size guardrails — validate before any exchange order ─────────────
+    if (positionSize < 3) {
+      throw new Error(`Position too small: ${positionSize.toFixed(4)} USDT (minimum 3 USDT)`);
+    }
+    const minBaseAmt = await getMinBaseAmount(signal.gateSymbol);
+    if (minBaseAmt > 0 && quantity < minBaseAmt) {
+      throw new Error(`Quantity too small: ${quantity.toFixed(8)} < ${minBaseAmt} minimum base qty for ${signal.gateSymbol}`);
+    }
 
     const entryOrder = await placeSpotOrder({
       currencyPair: signal.gateSymbol,

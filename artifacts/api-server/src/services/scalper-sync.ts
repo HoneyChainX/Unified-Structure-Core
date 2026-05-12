@@ -203,15 +203,36 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
     }
   }
 
+  // B9: Retry BE SL placement — triggered when TP1 consumed but slOrderId is null (prior placement failed)
+  if (trade.breakEvenActivated && !trade.tp1OrderId && !trade.slOrderId) {
+    const retryQty = quantity != null ? quantity * 0.70 : null;
+    if (entryPrice != null && retryQty != null && retryQty > 0) {
+      try {
+        const slFmt = await fmtForPair(gateSymbol, entryPrice, retryQty);
+        const slRule = side === "buy" ? "<=" : ">=";
+        const exitSide = side === "buy" ? "sell" : "buy";
+        const retrySl = await placePriceTriggeredOrder({
+          currencyPair: gateSymbol, triggerPrice: slFmt.price, triggerRule: slRule,
+          side: exitSide, amount: slFmt.amount, orderPrice: "0", orderType: "market",
+        });
+        const retrySlId = retrySl.id.toString();
+        await db.update(scalperTradesTable).set({ slOrderId: retrySlId }).where(eq(scalperTradesTable.id, id));
+        trade = { ...trade, slOrderId: retrySlId };
+        logger.info({ tradeId: id, retrySlId }, "CHT live: BE SL retry succeeded");
+      } catch (err) {
+        logger.error({ tradeId: id, err }, "CHT live: BE SL retry failed — trade still unprotected");
+      }
+    }
+  }
+
   // ── Check TP1 (30% exit → break-even) ─────────────────────────────────────
   if (!trade.breakEvenActivated && trade.tp1OrderId) {
     const result = await checkFill(trade.tp1OrderId);
     if (result?.filled) {
-      // TP1 filled: cancel full-qty SL, place new BE SL for remaining ~70%
-      await tryCancel(trade.slOrderId, "old-SL");
-
+      // B9: place new BE SL BEFORE cancelling old, to preserve protection on failure
       const remainingQty = quantity != null ? quantity * 0.70 : null;
       let newSlOrderId: string | null = null;
+      let slPlacementFailed = false;
 
       if (entryPrice != null && remainingQty != null && remainingQty > 0) {
         try {
@@ -228,12 +249,15 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
             orderType:    "market",
           });
           newSlOrderId = newSl.id.toString();
+          // New SL confirmed — now safe to cancel the old full-position SL
+          await tryCancel(trade.slOrderId, "old-SL");
           logger.info(
             { tradeId: id, newSlOrderId, bePrice: slFmt.price },
-            "CHT live: TP1 hit — break-even SL placed",
+            "CHT live: TP1 hit — break-even SL placed, old SL cancelled",
           );
         } catch (err) {
-          logger.warn({ tradeId: id, err }, "CHT live: failed to place break-even SL");
+          slPlacementFailed = true;
+          logger.error({ tradeId: id, err }, "CHT live: BE SL placement failed after TP1 — keeping old SL, will retry next cycle");
         }
       }
 
@@ -244,9 +268,12 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
       const newClosedQty    = tp1Qty;
       const newRemainingQty = (quantity ?? 0) - tp1Qty;
 
+      // B9: if placement failed, preserve old slOrderId (don't null it)
+      const dbSlOrderId = slPlacementFailed ? trade.slOrderId : newSlOrderId;
+
       await db.update(scalperTradesTable).set({
         slPrice:            entryPrice != null ? parseFloat(entryPrice.toFixed(8)) : undefined,
-        slOrderId:          newSlOrderId,
+        slOrderId:          dbSlOrderId,
         tp1OrderId:         null,  // TP1 consumed
         breakEvenActivated: true,
         closedQty:          newClosedQty.toFixed(8),
@@ -256,7 +283,7 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
 
       logger.info({ tradeId: id, tp1FillPrice: result.price, tp1PnlIncrement, newRealizedPnl }, "CHT live: TP1 — break-even activated, 30% P&L recorded");
       // Continue — don't return early; trade still open for TP2/TP3/SL
-      trade = { ...trade, tp1OrderId: null, slOrderId: newSlOrderId, slPrice: entryPrice ?? trade.slPrice, breakEvenActivated: true, closedQty: newClosedQty.toFixed(8), remainingQty: newRemainingQty.toFixed(8), realizedPnl: newRealizedPnl.toFixed(4) };
+      trade = { ...trade, tp1OrderId: null, slOrderId: dbSlOrderId, slPrice: entryPrice ?? trade.slPrice, breakEvenActivated: true, closedQty: newClosedQty.toFixed(8), remainingQty: newRemainingQty.toFixed(8), realizedPnl: newRealizedPnl.toFixed(4) };
     }
   }
 
@@ -281,6 +308,28 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
       }).where(eq(scalperTradesTable.id, id));
       logger.info({ tradeId: id, tp2Price: result.price, tp2PnlIncrement, newRealizedPnl, newRemainingQty }, "CHT live: TP2 partial — 30% exit recorded, trade still open");
       trade = { ...trade, tp2OrderId: null, closedQty: newClosedQty.toFixed(8), remainingQty: newRemainingQty.toFixed(8), realizedPnl: newRealizedPnl.toFixed(4) };
+
+      // B6: replace 70%-qty BE SL with 40%-qty SL for the TP2→TP3 phase
+      const remainingSlQty = qty * 0.40;
+      if (trade.slPrice != null && remainingSlQty > 0) {
+        try {
+          const slFmt = await fmtForPair(gateSymbol, trade.slPrice, remainingSlQty);
+          const slRule = side === "buy" ? "<=" : ">=";
+          const exitSide = side === "buy" ? "sell" : "buy";
+          const newSl = await placePriceTriggeredOrder({
+            currencyPair: gateSymbol, triggerPrice: slFmt.price, triggerRule: slRule,
+            side: exitSide, amount: slFmt.amount, orderPrice: "0", orderType: "market",
+          });
+          const tp2NewSlOrderId = newSl.id.toString();
+          // New SL placed — now safe to cancel the old BE SL
+          await tryCancel(trade.slOrderId, "be-sl-after-tp2");
+          await db.update(scalperTradesTable).set({ slOrderId: tp2NewSlOrderId }).where(eq(scalperTradesTable.id, id));
+          trade = { ...trade, slOrderId: tp2NewSlOrderId };
+          logger.info({ tradeId: id, tp2NewSlOrderId, remainingSlQty }, "CHT live: TP2 — new 40%-qty SL placed, old BE SL cancelled");
+        } catch (err) {
+          logger.error({ tradeId: id, err }, "CHT live: TP2 — failed to place new 40%-qty SL; old BE SL preserved");
+        }
+      }
     }
   }
 
