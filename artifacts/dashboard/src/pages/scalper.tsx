@@ -1414,12 +1414,13 @@ export function ScalperPage() {
               const tpPct = field("targetProfitPct", null) as number | null;
               // Normalise: legacy records may not have tpMode set yet
               const tpMode = rawTpMode === "micro_2usd" ? "micro"
+                : rawTpMode === "mrx_fixed" ? "mrx"
                 : isDynamic ? "auto"
                 : tpPct != null ? "pct"
                 : "usdt";
               return (
                 <>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                     <button
                       onClick={() => { set("tpMode", "fixed_usdt"); set("dynamicTp", false); set("targetProfitPct", null); }}
                       className={`py-1.5 text-xs font-mono border transition-colors ${tpMode === "usdt" ? "border-primary bg-primary/10 text-primary" : "border-border bg-secondary text-muted-foreground"}`}
@@ -1436,6 +1437,10 @@ export function ScalperPage() {
                       onClick={() => { set("tpMode", "micro_2usd"); set("dynamicTp", false); set("targetProfitPct", null); set("longOnly", true); }}
                       className={`py-1.5 text-xs font-mono border transition-colors ${tpMode === "micro" ? "border-yellow-500 bg-yellow-500/10 text-yellow-300" : "border-border bg-secondary text-muted-foreground"}`}
                     >MICRO $2</button>
+                    <button
+                      onClick={() => { set("tpMode", "mrx_fixed"); set("dynamicTp", false); set("targetProfitPct", null); set("longOnly", true); }}
+                      className={`py-1.5 text-xs font-mono border transition-colors ${tpMode === "mrx" ? "border-orange-500 bg-orange-500/10 text-orange-300" : "border-border bg-secondary text-muted-foreground"}`}
+                    >MRX FIXED</button>
                   </div>
                   {tpMode === "usdt" && (
                     <>
@@ -1495,6 +1500,27 @@ export function ScalperPage() {
                           className="flex-1 bg-secondary border border-yellow-500/40 px-3 py-2 text-sm font-mono focus:outline-none focus:border-yellow-400 text-yellow-300"
                         />
                         <span className="text-yellow-400 font-mono font-bold text-lg">USDT</span>
+                      </div>
+                    </div>
+                  )}
+                  {tpMode === "mrx" && (
+                    <div className="border border-orange-500/40 bg-orange-500/5 px-3 py-2.5 space-y-2">
+                      <div className="text-orange-300 text-xs font-bold tracking-wider">MRX FIXED PARAMETERS</div>
+                      <div className="text-xs text-muted-foreground leading-relaxed">
+                        Hardcoded TP/SL tuned for the MRX oversold-snap setup on 3m candles. These values are fixed and cannot be adjusted — the engine is calibrated around them.
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                        <div className="bg-green-500/10 border border-green-500/30 px-2 py-1.5">
+                          <div className="text-green-400 font-bold">TP +0.28%</div>
+                          <div className="text-muted-foreground text-[10px]">entry × 1.0028</div>
+                        </div>
+                        <div className="bg-red-500/10 border border-red-500/30 px-2 py-1.5">
+                          <div className="text-red-400 font-bold">SL −2.5%</div>
+                          <div className="text-muted-foreground text-[10px]">entry × 0.975</div>
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-orange-400/70 font-mono">
+                        Risk/Reward ≈ 1 : 8.9 · LONG ONLY · 100% USDT balance · Best fit: RANGING market
                       </div>
                     </div>
                   )}
