@@ -395,7 +395,14 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
         }
       }
     } catch (err) {
-      logger.warn({ tradeId: trade.id, err }, "Scalper: could not fetch base balance — using filledQty for SL/TP");
+      // Fallback: apply known GT taker-fee rate so we never overshoot available balance.
+      // GATEIO_TAKER_FEE_RATE env var lets you override (default 0.0009 = 0.09% GT rate).
+      const takerFee = parseFloat(process.env.GATEIO_TAKER_FEE_RATE ?? "0.0009");
+      slTpQty = filledQty * (1 - takerFee);
+      logger.warn(
+        { tradeId: trade.id, err, takerFee, slTpQtyFallback: slTpQty },
+        "Scalper: could not fetch base balance — applying GT fee-rate fallback to filledQty"
+      );
     }
 
     // ── Micro mode: recalculate 2-TP levels at actual fill price ─────────
@@ -463,6 +470,18 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
 
     logger.info({ tradeId: trade.id, filledPrice, filledQty, slTpQty, tpPrice: actualTp, slPrice: actualSl, strategy: isMicro ? "micro_2usd" : signal.strategy }, "Scalper: entry filled");
 
+    // ── Stop-limit SL: compute limit price at configurable offset from trigger ──
+    // slLimitOffsetPct (default 0.2%) is set below the trigger for longs and above
+    // for shorts — ensures the limit fills even in a fast gap through the stop level.
+    const slOffsetFactor = (config.slLimitOffsetPct ?? 0.2) / 100;
+    const actualSlLimitPrice = signal.side === "buy"
+      ? actualSl * (1 - slOffsetFactor)   // long: limit slightly below trigger
+      : actualSl * (1 + slOffsetFactor);  // short: limit slightly above trigger
+    logger.info(
+      { tradeId: trade.id, slTrigger: actualSl, slLimitPrice: actualSlLimitPrice, offsetPct: config.slLimitOffsetPct ?? 0.2 },
+      "Scalper: SL stop-limit params computed"
+    );
+
     // ── Post-fill quantity validation ─────────────────────────────────────
     // Validate every order slice against the pair's minBaseAmount BEFORE
     // touching Gate.io, so we skip orders that would be rejected rather than
@@ -515,10 +534,11 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       const slRule      = signal.side === "buy" ? "<=" : ">=";
       const exitSide    = signal.side === "buy" ? "sell" : "buy";
 
-      const [fmtTp1, fmtTp2, fmtSl] = await Promise.all([
+      const [fmtTp1, fmtTp2, fmtSl, fmtSlLimit] = await Promise.all([
         fmtForPair(signal.gateSymbol, micro2TpPrices.tp1Price, q1),
         fmtForPair(signal.gateSymbol, micro2TpPrices.tp2Price, q2),
         fmtForPair(signal.gateSymbol, actualSl, slTpQty),
+        fmtForPair(signal.gateSymbol, actualSlLimitPrice, slTpQty),
       ]);
 
       // TP1 (1R, 50%)
@@ -566,10 +586,10 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
             currencyPair: signal.gateSymbol,
             triggerPrice: fmtSl.price, triggerRule: slRule,
             side: exitSide, amount: fmtSl.amount,
-            orderPrice: "0", orderType: "market",
+            orderPrice: fmtSlLimit.price, orderType: "limit",
           });
           orderUpdates.slOrderId = o.id.toString();
-          logger.info({ tradeId: trade.id, slOrderId: o.id, price: fmtSl.price }, "Micro: SL order placed");
+          logger.info({ tradeId: trade.id, slOrderId: o.id, trigger: fmtSl.price, limitPrice: fmtSlLimit.price }, "Micro: SL stop-limit placed");
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           orderErrors.push(`SL: ${msg}`);
@@ -587,11 +607,12 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       const triggerRule = signal.side === "buy" ? ">=" : "<=";
       const exitSide    = signal.side === "buy" ? "sell" : "buy";
 
-      const [fmt1, fmt2, fmt3, fmtSl] = await Promise.all([
+      const [fmt1, fmt2, fmt3, fmtSl, fmtSlLimit] = await Promise.all([
         fmtForPair(signal.gateSymbol, cht3TpPrices.tp1Price, q1),
         fmtForPair(signal.gateSymbol, cht3TpPrices.tp2Price, q2),
         fmtForPair(signal.gateSymbol, cht3TpPrices.tp3Price, q3),
         fmtForPair(signal.gateSymbol, actualSl, slTpQty),
+        fmtForPair(signal.gateSymbol, actualSlLimitPrice, slTpQty),
       ]);
 
       // TP1 (1R, 30%)
@@ -659,10 +680,10 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
             currencyPair: signal.gateSymbol,
             triggerPrice: fmtSl.price, triggerRule: slRule,
             side: exitSide, amount: fmtSl.amount,
-            orderPrice: "0", orderType: "market",
+            orderPrice: fmtSlLimit.price, orderType: "limit",
           });
           orderUpdates.slOrderId = o.id.toString();
-          logger.info({ tradeId: trade.id, slOrderId: o.id, price: fmtSl.price }, "CHT: SL order placed");
+          logger.info({ tradeId: trade.id, slOrderId: o.id, trigger: fmtSl.price, limitPrice: fmtSlLimit.price }, "CHT: SL stop-limit placed");
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           orderErrors.push(`SL: ${msg}`);
@@ -674,8 +695,11 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
 
     } else {
       // ── Standard single TP + SL (BB+RSI / SMC) ──────────────────────────
-      const tpFmt = await fmtForPair(signal.gateSymbol, actualTp, slTpQty);
-      const slFmt = await fmtForPair(signal.gateSymbol, actualSl, slTpQty);
+      const [tpFmt, slFmt, slLimitFmt] = await Promise.all([
+        fmtForPair(signal.gateSymbol, actualTp, slTpQty),
+        fmtForPair(signal.gateSymbol, actualSl, slTpQty),
+        fmtForPair(signal.gateSymbol, actualSlLimitPrice, slTpQty),
+      ]);
 
       if (slQtyOk) {
         try {
@@ -702,11 +726,11 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
             triggerRule:  signal.side === "buy" ? "<=" : ">=",
             side:         signal.side === "buy" ? "sell" : "buy",
             amount:       slFmt.amount,
-            orderPrice:   "0",
-            orderType:    "market",
+            orderPrice:   slLimitFmt.price,
+            orderType:    "limit",
           });
           orderUpdates.slOrderId = slOrder.id.toString();
-          logger.info({ tradeId: trade.id, slOrderId: slOrder.id }, "Scalper: SL order placed");
+          logger.info({ tradeId: trade.id, slOrderId: slOrder.id, trigger: slFmt.price, limitPrice: slLimitFmt.price }, "Scalper: SL stop-limit placed");
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           logger.warn({ tradeId: trade.id, err: msg }, "Scalper: SL order failed");

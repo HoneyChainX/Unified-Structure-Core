@@ -11,6 +11,10 @@ export const scalperConfigTable = pgTable("scalper_config", {
   positionSizePct: real("position_size_pct"),           // % of live USDT balance per trade (overrides fixed if set)
   targetProfitUsdt: real("target_profit_usdt").notNull().default(2),
   slPct: real("sl_pct").notNull().default(0.5),
+  // Stop-limit SL offset — limit price placed this % away from the trigger
+  // (0.2 = 0.2%). Ensures the limit fills even in a fast drop/spike through
+  // the stop level. Configurable per account; default 0.2%.
+  slLimitOffsetPct: real("sl_limit_offset_pct").notNull().default(0.2),
 
   maxOpenTrades: integer("max_open_trades").notNull().default(3),
   cooldownMinutes: integer("cooldown_minutes").notNull().default(5),

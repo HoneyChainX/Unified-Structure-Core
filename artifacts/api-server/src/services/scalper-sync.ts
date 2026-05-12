@@ -42,6 +42,30 @@ async function getAvailableBase(gateSymbol: string): Promise<number> {
   }
 }
 
+/**
+ * Fetches the configurable stop-limit SL offset percentage from the DB config.
+ * Falls back to 0.2% if config is unavailable.
+ */
+async function getSlLimitOffsetPct(): Promise<number> {
+  try {
+    const [cfg] = await db.select({ v: scalperConfigTable.slLimitOffsetPct }).from(scalperConfigTable).limit(1);
+    return cfg?.v ?? 0.2;
+  } catch {
+    return 0.2;
+  }
+}
+
+/**
+ * Computes the stop-limit order's limit price by applying an offset away from
+ * the trigger in the direction that keeps the order fillable in a fast move.
+ * Long (buy side): limit = trigger * (1 - offset) — slightly below trigger
+ * Short (sell side): limit = trigger * (1 + offset) — slightly above trigger
+ */
+function computeSlLimitPrice(trigger: number, side: string, offsetPct: number): number {
+  const f = offsetPct / 100;
+  return side === "buy" ? trigger * (1 - f) : trigger * (1 + f);
+}
+
 export let scalperLastSyncAt: Date | null = null;
 
 // ── Compound balance update ───────────────────────────────────────────────────
@@ -224,20 +248,27 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
 
   // B9: Retry BE SL placement — triggered when TP1 consumed but slOrderId is null (prior placement failed)
   if (trade.breakEvenActivated && !trade.tp1OrderId && !trade.slOrderId) {
-    const retryQty = quantity != null ? quantity * 0.70 : null;
-    if (entryPrice != null && retryQty != null && retryQty > 0) {
+    const beAvailBase = await getAvailableBase(gateSymbol);
+    const effectiveQty = beAvailBase > 0 ? Math.min(quantity ?? 0, beAvailBase) : (quantity ?? 0);
+    const retryQty = effectiveQty * 0.70;
+    if (entryPrice != null && retryQty > 0) {
       try {
-        const slFmt = await fmtForPair(gateSymbol, entryPrice, retryQty);
+        const slOffsetPct = await getSlLimitOffsetPct();
+        const slLimitPriceVal = computeSlLimitPrice(entryPrice, side, slOffsetPct);
+        const [slFmt, slLimFmt] = await Promise.all([
+          fmtForPair(gateSymbol, entryPrice, retryQty),
+          fmtForPair(gateSymbol, slLimitPriceVal, retryQty),
+        ]);
         const slRule = side === "buy" ? "<=" : ">=";
         const exitSide = side === "buy" ? "sell" : "buy";
         const retrySl = await placePriceTriggeredOrder({
           currencyPair: gateSymbol, triggerPrice: slFmt.price, triggerRule: slRule,
-          side: exitSide, amount: slFmt.amount, orderPrice: "0", orderType: "market",
+          side: exitSide, amount: slFmt.amount, orderPrice: slLimFmt.price, orderType: "limit",
         });
         const retrySlId = retrySl.id.toString();
         await db.update(scalperTradesTable).set({ slOrderId: retrySlId }).where(eq(scalperTradesTable.id, id));
         trade = { ...trade, slOrderId: retrySlId };
-        logger.info({ tradeId: id, retrySlId }, "CHT live: BE SL retry succeeded");
+        logger.info({ tradeId: id, retrySlId, trigger: slFmt.price, limitPrice: slLimFmt.price, retryQty }, "CHT live: BE SL stop-limit retry succeeded");
       } catch (err) {
         logger.error({ tradeId: id, err }, "CHT live: BE SL retry failed — trade still unprotected");
       }
@@ -255,7 +286,15 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
 
       if (entryPrice != null && remainingQty != null && remainingQty > 0) {
         try {
-          const slFmt = await fmtForPair(gateSymbol, entryPrice, remainingQty);
+          const tp1AvailBase = await getAvailableBase(gateSymbol);
+          const tp1EffectiveQty = tp1AvailBase > 0 ? Math.min(quantity ?? 0, tp1AvailBase) : (quantity ?? 0);
+          const beSlQty = tp1EffectiveQty * 0.70;
+          const slOffsetPct = await getSlLimitOffsetPct();
+          const slLimitPriceVal = computeSlLimitPrice(entryPrice, side, slOffsetPct);
+          const [slFmt, slLimFmt] = await Promise.all([
+            fmtForPair(gateSymbol, entryPrice, beSlQty > 0 ? beSlQty : remainingQty),
+            fmtForPair(gateSymbol, slLimitPriceVal, beSlQty > 0 ? beSlQty : remainingQty),
+          ]);
           const slRule = side === "buy" ? "<=" : ">=";
           const exitSide = side === "buy" ? "sell" : "buy";
           const newSl = await placePriceTriggeredOrder({
@@ -264,15 +303,15 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
             triggerRule:  slRule,
             side:         exitSide,
             amount:       slFmt.amount,
-            orderPrice:   "0",
-            orderType:    "market",
+            orderPrice:   slLimFmt.price,
+            orderType:    "limit",
           });
           newSlOrderId = newSl.id.toString();
           // New SL confirmed — now safe to cancel the old full-position SL
           await tryCancel(trade.slOrderId, "old-SL");
           logger.info(
-            { tradeId: id, newSlOrderId, bePrice: slFmt.price },
-            "CHT live: TP1 hit — break-even SL placed, old SL cancelled",
+            { tradeId: id, newSlOrderId, trigger: slFmt.price, limitPrice: slLimFmt.price },
+            "CHT live: TP1 hit — break-even SL stop-limit placed, old SL cancelled",
           );
         } catch (err) {
           slPlacementFailed = true;
@@ -329,22 +368,29 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
       trade = { ...trade, tp2OrderId: null, closedQty: newClosedQty.toFixed(8), remainingQty: newRemainingQty.toFixed(8), realizedPnl: newRealizedPnl.toFixed(4) };
 
       // B6: replace 70%-qty BE SL with 40%-qty SL for the TP2→TP3 phase
-      const remainingSlQty = qty * 0.40;
+      const tp2AvailBase = await getAvailableBase(gateSymbol);
+      const tp2EffectiveRem = tp2AvailBase > 0 ? Math.min(qty, tp2AvailBase) : qty;
+      const remainingSlQty = tp2EffectiveRem * 0.40;
       if (trade.slPrice != null && remainingSlQty > 0) {
         try {
-          const slFmt = await fmtForPair(gateSymbol, trade.slPrice, remainingSlQty);
+          const slOffsetPct = await getSlLimitOffsetPct();
+          const slLimitPriceVal = computeSlLimitPrice(trade.slPrice, side, slOffsetPct);
+          const [slFmt, slLimFmt] = await Promise.all([
+            fmtForPair(gateSymbol, trade.slPrice, remainingSlQty),
+            fmtForPair(gateSymbol, slLimitPriceVal, remainingSlQty),
+          ]);
           const slRule = side === "buy" ? "<=" : ">=";
           const exitSide = side === "buy" ? "sell" : "buy";
           const newSl = await placePriceTriggeredOrder({
             currencyPair: gateSymbol, triggerPrice: slFmt.price, triggerRule: slRule,
-            side: exitSide, amount: slFmt.amount, orderPrice: "0", orderType: "market",
+            side: exitSide, amount: slFmt.amount, orderPrice: slLimFmt.price, orderType: "limit",
           });
           const tp2NewSlOrderId = newSl.id.toString();
           // New SL placed — now safe to cancel the old BE SL
           await tryCancel(trade.slOrderId, "be-sl-after-tp2");
           await db.update(scalperTradesTable).set({ slOrderId: tp2NewSlOrderId }).where(eq(scalperTradesTable.id, id));
           trade = { ...trade, slOrderId: tp2NewSlOrderId };
-          logger.info({ tradeId: id, tp2NewSlOrderId, remainingSlQty }, "CHT live: TP2 — new 40%-qty SL placed, old BE SL cancelled");
+          logger.info({ tradeId: id, tp2NewSlOrderId, remainingSlQty, trigger: slFmt.price, limitPrice: slLimFmt.price }, "CHT live: TP2 — new 40%-qty SL stop-limit placed, old BE SL cancelled");
         } catch (err) {
           logger.error({ tradeId: id, err }, "CHT live: TP2 — failed to place new 40%-qty SL; old BE SL preserved");
         }
@@ -645,12 +691,16 @@ async function syncStandardTrade(trade: typeof scalperTradesTable.$inferSelect):
   // TP/SL retry if placement failed
   if ((!trade.tpOrderId || !trade.slOrderId) && trade.tpPrice != null && trade.slPrice != null && quantity != null) {
     logger.warn({ tradeId: id }, "Scalper sync: missing TP/SL orders — retrying");
+    // Clamp to actual available balance — fee deductions may leave less than DB quantity
+    const retryAvailBase = await getAvailableBase(gateSymbol);
+    const retryQty = retryAvailBase > 0 ? Math.min(quantity, retryAvailBase) : quantity;
+    logger.info({ tradeId: id, quantity, retryAvailBase, retryQty }, "Scalper sync: retry qty resolved");
     const retryUpdates: Record<string, unknown> = {};
     const retryErrors: string[] = [];
 
     if (!trade.tpOrderId) {
       try {
-        const fmt = await fmtForPair(gateSymbol, trade.tpPrice, quantity);
+        const fmt = await fmtForPair(gateSymbol, trade.tpPrice, retryQty);
         const o = await placePriceTriggeredOrder({
           currencyPair: gateSymbol,
           triggerPrice: fmt.price,
@@ -668,16 +718,21 @@ async function syncStandardTrade(trade: typeof scalperTradesTable.$inferSelect):
 
     if (!trade.slOrderId) {
       try {
-        const fmt = await fmtForPair(gateSymbol, trade.slPrice, quantity);
+        const slOffsetPct = await getSlLimitOffsetPct();
+        const slLimitPriceVal = computeSlLimitPrice(trade.slPrice, side, slOffsetPct);
+        const [fmt, slLimFmt] = await Promise.all([
+          fmtForPair(gateSymbol, trade.slPrice, retryQty),
+          fmtForPair(gateSymbol, slLimitPriceVal, retryQty),
+        ]);
         const o = await placePriceTriggeredOrder({
           currencyPair: gateSymbol,
           triggerPrice: fmt.price,
           triggerRule:  side === "buy" ? "<=" : ">=",
           side:         side === "buy" ? "sell" : "buy",
-          amount: fmt.amount, orderPrice: "0", orderType: "market",
+          amount: fmt.amount, orderPrice: slLimFmt.price, orderType: "limit",
         });
         retryUpdates.slOrderId = o.id.toString();
-        logger.info({ tradeId: id, slOrderId: o.id }, "Scalper sync: SL retry succeeded");
+        logger.info({ tradeId: id, slOrderId: o.id, trigger: fmt.price, limitPrice: slLimFmt.price }, "Scalper sync: SL stop-limit retry succeeded");
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         retryErrors.push(`SL retry: ${msg}`);
@@ -957,17 +1012,25 @@ async function syncMicroLiveTrade(trade: typeof scalperTradesTable.$inferSelect)
 
       if (entryPrice != null && remainingQty != null && remainingQty > 0) {
         try {
-          const slFmt = await fmtForPair(gateSymbol, entryPrice, remainingQty);
+          const microAvailBase = await getAvailableBase(gateSymbol);
+          const microEffectiveQty = microAvailBase > 0 ? Math.min(quantity ?? 0, microAvailBase) : (quantity ?? 0);
+          const microBeSlQty = microEffectiveQty * 0.50;
+          const slOffsetPct = await getSlLimitOffsetPct();
+          const slLimitPriceVal = computeSlLimitPrice(entryPrice, side, slOffsetPct);
+          const [slFmt, slLimFmt] = await Promise.all([
+            fmtForPair(gateSymbol, entryPrice, microBeSlQty > 0 ? microBeSlQty : remainingQty),
+            fmtForPair(gateSymbol, slLimitPriceVal, microBeSlQty > 0 ? microBeSlQty : remainingQty),
+          ]);
           const slRule = side === "buy" ? "<=" : ">=";
           const exitSide = side === "buy" ? "sell" : "buy";
           const newSl = await placePriceTriggeredOrder({
             currencyPair: gateSymbol,
             triggerPrice: slFmt.price, triggerRule: slRule,
             side: exitSide, amount: slFmt.amount,
-            orderPrice: "0", orderType: "market",
+            orderPrice: slLimFmt.price, orderType: "limit",
           });
           newSlOrderId = newSl.id.toString();
-          logger.info({ tradeId: id, newSlOrderId, bePrice: slFmt.price }, "Micro live: TP1 hit — break-even SL placed");
+          logger.info({ tradeId: id, newSlOrderId, trigger: slFmt.price, limitPrice: slLimFmt.price }, "Micro live: TP1 hit — break-even SL stop-limit placed");
         } catch (err) {
           logger.warn({ tradeId: id, err }, "Micro live: failed to place break-even SL");
         }

@@ -300,9 +300,20 @@ export async function fmtForPair(
 ): Promise<{ price: string; amount: string }> {
   try {
     const info = await fetchPairInfo(currencyPair);
+    // Floor (truncate down) so we never request more than the available balance.
+    // toFixed() rounds half-up and can produce a value above the actual wallet
+    // balance by one step, causing Gate.io BALANCE_NOT_ENOUGH / INVALID_PARAM_VALUE.
+    const scale = Math.pow(10, info.amount_precision);
+    const flooredAmt = Math.floor(amount * scale) / scale;
+    if (amount - flooredAmt > 1e-9) {
+      logger.info(
+        { currencyPair, rawAmount: amount, flooredAmt, precision: info.amount_precision },
+        "gateio.fmtForPair: amount floored to pair precision (raw → adjusted)"
+      );
+    }
     return {
       price:  price.toFixed(info.precision),
-      amount: amount.toFixed(info.amount_precision),
+      amount: flooredAmt.toFixed(info.amount_precision),
     };
   } catch {
     logger.warn({ currencyPair }, "gateio: could not fetch pair precision — using static fallback");
