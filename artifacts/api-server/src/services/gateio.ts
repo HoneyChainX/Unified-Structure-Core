@@ -1,3 +1,46 @@
+import crypto from "crypto";
+import { logger } from "../lib/logger";
+
+const BASE = "https://api.gateio.ws";
+const API_PATH_PREFIX = "/api/v4";
+
+function sign(
+  method: string,
+  fullPath: string,
+  query: string,
+  body: string,
+  timestamp: string
+): string {
+  const bodyHash = crypto.createHash("sha512").update(body).digest("hex");
+  const payload = `${method}\n${fullPath}\n${query}\n${bodyHash}\n${timestamp}`;
+  const secret = process.env.GATEIO_API_SECRET ?? "";
+  return crypto.createHmac("sha512", secret).update(payload).digest("hex");
+}
+
+async function request<T>(
+  method: string,
+  path: string,
+  params?: Record<string, string>,
+  body?: unknown,
+  _retries = 0
+): Promise<T> {
+  const apiKey = process.env.GATEIO_API_KEY ?? "";
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+
+  const query = params ? new URLSearchParams(params).toString() : "";
+  const bodyStr = body ? JSON.stringify(body) : "";
+
+  // Gate.io signature requires the full path including /api/v4 prefix
+  const fullPath = `${API_PATH_PREFIX}${path}`;
+  const signature = sign(method.toUpperCase(), fullPath, query, bodyStr, timestamp);
+
+  const url = `${BASE}${fullPath}${query ? "?" + query : ""}`;
+
+  const res = await fetch(url, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      "KEY": apiKey,
       "SIGN": signature,
       "Timestamp": timestamp,
     },
