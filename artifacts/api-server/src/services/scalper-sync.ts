@@ -87,6 +87,14 @@ async function updateScalperCompoundBalance(pnl: number): Promise<void> {
     const [config] = await db.select().from(scalperConfigTable).limit(1);
     if (!config || !config.compoundingEnabled || config.compoundBalance == null) return;
 
+    // positionSizePct takes priority over compounding in the executor's sizing chain.
+    // If it is set, compound balance is not used for sizing, so mutating it here would
+    // cause the displayed value to drift in a way that is misleading and irreversible.
+    if (config.positionSizePct != null && config.positionSizePct > 0) {
+      logger.debug({ pnl }, "Scalper: skipping compound balance update — positionSizePct mode is active");
+      return;
+    }
+
     const newBalance = Math.max(config.compoundBalance + pnl, config.positionSizeUsdt * 0.1);
     await db.update(scalperConfigTable)
       .set({ compoundBalance: parseFloat(newBalance.toFixed(4)), updatedAt: new Date() })
@@ -464,7 +472,7 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
       }).where(eq(scalperTradesTable.id, id));
 
       logger.info({ tradeId: id, tp3Price: result.price, finalPnl }, "CHT live: TP3 — trade fully closed");
-      if (finalPnl) await updateScalperCompoundBalance(finalPnl);
+      await updateScalperCompoundBalance(finalPnl);
       return;
     }
   }
@@ -495,7 +503,7 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
       }).where(eq(scalperTradesTable.id, id));
 
       logger.info({ tradeId: id, slPrice: result.price, remainingQty, finalPnl }, "CHT live: SL hit — trade closed");
-      if (finalPnl) await updateScalperCompoundBalance(finalPnl);
+      await updateScalperCompoundBalance(finalPnl);
       return;
     }
   }
