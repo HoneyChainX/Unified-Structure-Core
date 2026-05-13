@@ -149,7 +149,7 @@ router.delete("/trades/:id/cancel", async (req, res): Promise<void> => {
     // 1. Cancel TP/SL trigger orders so they don't fire after we exit
     const cancelIds = [trade.tpOrderId, trade.slOrderId].filter(Boolean) as string[];
     for (const orderId of cancelIds) {
-      try { await cancelPriceTriggeredOrder(parseInt(orderId), trade.gateSymbol); } catch { /* ignore */ }
+      try { await cancelPriceTriggeredOrder(orderId, trade.gateSymbol); } catch { /* ignore */ }
     }
 
     // 2. Place a market exit order to close the actual position on Gate.io
@@ -837,7 +837,7 @@ router.post("/trade/:id/close", async (req, res): Promise<void> => {
   for (const orderId of [trade.tpOrderId, trade.slOrderId]) {
     if (!orderId) continue;
     try {
-      await cancelPriceTriggeredOrder(Number(orderId), trade.gateSymbol);
+      await cancelPriceTriggeredOrder(orderId, trade.gateSymbol);
       req.log.info({ tradeId, orderId }, "Force close: cancelled companion order");
     } catch (err) {
       req.log.warn({ tradeId, orderId, err }, "Force close: could not cancel companion order (may already be gone)");

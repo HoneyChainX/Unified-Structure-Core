@@ -529,7 +529,7 @@ router.delete("/trades/:id", async (req, res): Promise<void> => {
 
         // fix #1: only cancel TP/SL after position is confirmed closed
         for (const orderId of [trade.slOrderId, trade.tp1OrderId, trade.tp2OrderId, trade.tp3OrderId].filter((x): x is string => x != null)) {
-          try { await cancelPriceTriggeredOrder(parseInt(orderId), trade.gateSymbol); }
+          try { await cancelPriceTriggeredOrder(orderId, trade.gateSymbol); }
           catch (err) { req.log.warn({ tradeId: id, orderId, err }, "Cancel: trigger order already gone or filled"); }
         }
       } catch (closeErr) {
@@ -545,14 +545,14 @@ router.delete("/trades/:id", async (req, res): Promise<void> => {
       // No quantity to close (position already flat) — just cancel trigger orders
       req.log.warn({ tradeId: id }, "Cancel: closeQty=0, skipping market exit, cancelling trigger orders only");
       for (const orderId of [trade.slOrderId, trade.tp1OrderId, trade.tp2OrderId, trade.tp3OrderId].filter((x): x is string => x != null)) {
-        try { await cancelPriceTriggeredOrder(parseInt(orderId), trade.gateSymbol); }
+        try { await cancelPriceTriggeredOrder(orderId, trade.gateSymbol); }
         catch (err) { req.log.warn({ tradeId: id, orderId, err }, "Failed to cancel order"); }
       }
     }
   } else if (!trade.paperMode) {
     // Non-open live trade (e.g. error/pending): cancel any residual trigger orders only
     for (const orderId of [trade.slOrderId, trade.tp1OrderId, trade.tp2OrderId, trade.tp3OrderId].filter((x): x is string => x != null)) {
-      try { await cancelPriceTriggeredOrder(parseInt(orderId), trade.gateSymbol); }
+      try { await cancelPriceTriggeredOrder(orderId, trade.gateSymbol); }
       catch (err) { req.log.warn({ tradeId: id, orderId, err }, "Failed to cancel order"); }
     }
   }

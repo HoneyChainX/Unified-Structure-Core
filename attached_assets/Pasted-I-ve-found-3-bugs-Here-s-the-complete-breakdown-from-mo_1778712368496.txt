@@ -1,0 +1,29 @@
+I've found 3 bugs. Here's the complete breakdown, from most critical to least:
+
+Bug 1 — CRITICAL: Gate.io order IDs are corrupted by JavaScript number precision loss
+This is what killed both trades.
+
+Gate.io's price-triggered order IDs are ~19-digit numbers (e.g. 2054650454578565789). JavaScript's Number type can only represent integers exactly up to ~15 digits (9007199254740991). Anything larger loses its last digits.
+
+What actually happened, step by step:
+
+Order placed → Gate.io returns real ID 2054650454578565789
+JSON.parse() silently corrupts it → 2054650454578565632 (precision lost)
+Stored in DB as string, then Number(trade.tpOrderId) in sync corrupts it further → 2054650454578565000 (trailing zeros)
+Sync queries /spot/price_orders/2054650454578565000 — a ID that doesn't exist
+Gate.io correctly returns "ORDER_NOT_FOUND"
+Sync treats this as "terminal orders gone" → emergency market exit → trade killed within 10 seconds of opening
+This happens to every single live trade. The TP/SL orders are live on Gate.io and working correctly, but the sync can never verify them because it's querying with the wrong ID.
+
+Bug 2 — SECONDARY: No grace period before terminal treatment
+Even if IDs were correct, the 10s sync fires only ~4 seconds after an order is placed — before Gate.io's query API finishes indexing the new order. The code immediately treats "order not found" as fatal with zero waiting period. A 2-minute grace window (skip terminal logic for trades younger than 2 min) would prevent this class of false positives entirely.
+
+Bug 3 — SECONDARY: Compound balance double-credited on close
+From the logs — oldBalance=47.6599 pnl=0.116... was applied twice at the same millisecond for trade #293. Because all trade syncs run concurrently via Promise.allSettled, two sync ticks overlapping can both read the trade as still-open, both detect terminal, and both apply the P&L to the balance. The balance ends up with phantom gains.
+
+Fix plan
+All three fixes are in the same two files (gateio.ts and scalper-sync.ts):
+
+gateio.ts — Extract the id from the raw HTTP response body as a string using regex before JSON.parse() sees it. Store and pass all price-triggered order IDs as strings throughout. Never call Number() on them — use string IDs directly in URL paths.
+
+scalper-sync.ts — Add a 2-minute grace period: skip ORDER_NOT_FOUND terminal treatment if trade.createdAt is less than 2 minutes ago. Also switch from Promise.allSettled to sequential processing to prevent the double-update race on concurrent sync ticks.

@@ -96,12 +96,12 @@ async function syncOpenTrade(trade: typeof tradesTable.$inferSelect): Promise<vo
     return;
   }
 
-  const orderChecks: { orderId: number; reason: string }[] = [];
+  const orderChecks: { orderId: string; reason: string }[] = [];
 
-  if (trade.slOrderId) orderChecks.push({ orderId: Number(trade.slOrderId), reason: "sl" });
-  if (trade.tp1OrderId) orderChecks.push({ orderId: Number(trade.tp1OrderId), reason: "tp1" });
-  if (trade.tp2OrderId) orderChecks.push({ orderId: Number(trade.tp2OrderId), reason: "tp2" });
-  if (trade.tp3OrderId) orderChecks.push({ orderId: Number(trade.tp3OrderId), reason: "tp3" });
+  if (trade.slOrderId) orderChecks.push({ orderId: trade.slOrderId, reason: "sl" });
+  if (trade.tp1OrderId) orderChecks.push({ orderId: trade.tp1OrderId, reason: "tp1" });
+  if (trade.tp2OrderId) orderChecks.push({ orderId: trade.tp2OrderId, reason: "tp2" });
+  if (trade.tp3OrderId) orderChecks.push({ orderId: trade.tp3OrderId, reason: "tp3" });
 
   // A2: terminal order handling + poll timeout
   let terminalOrderCount = 0;

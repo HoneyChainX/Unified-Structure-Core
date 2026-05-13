@@ -60,22 +60,12 @@ async function request<T>(
     throw new Error(`Gate.io ${res.status}: ${text}`);
   }
 
-  return safeJsonParse<T>(text);
-}
-
-/**
- * Parse a Gate.io JSON response, preserving 16+ digit numeric IDs as strings.
- *
- * Gate.io price-triggered order IDs are 19-digit integers that exceed
- * JavaScript's Number.MAX_SAFE_INTEGER (2^53 − 1 ≈ 16 digits). A naive
- * JSON.parse silently corrupts the last few digits, so we pre-quote any bare
- * numeric `"id": 12345…` field with 16+ digits before parsing. The regex is
- * intentionally narrow (only the literal key `"id"` followed by a long bare
- * integer) to avoid touching prices, amounts, or other numeric fields.
- */
-function safeJsonParse<T>(text: string): T {
-  const safe = text.replace(/"id"\s*:\s*(\d{16,})/g, '"id":"$1"');
-  return JSON.parse(safe) as T;
+  // Gate.io price-triggered order IDs are ~19-digit integers that exceed
+  // Number.MAX_SAFE_INTEGER (2^53-1 ≈ 9e15). JSON.parse silently corrupts
+  // them. Rewrite any bare numeric "id" value with 16+ digits to a quoted
+  // string before parsing so the exact value is preserved end-to-end.
+  const safeText = text.replace(/"id"\s*:\s*(\d{16,})/g, '"id":"$1"');
+  return JSON.parse(safeText) as T;
 }
 
 export interface ApiKeyDetail {
@@ -164,8 +154,6 @@ export async function placeSpotOrder(params: {
 }
 
 export interface PriceTriggeredOrder {
-  // Gate.io price-triggered order IDs are 19-digit integers — must stay as strings
-  // throughout the codebase to avoid Number() precision loss (see safeJsonParse).
   id: string;
   status: string;
   reason: string;

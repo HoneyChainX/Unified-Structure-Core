@@ -24,18 +24,6 @@ import {
 } from "./gateio";
 import { logger } from "../lib/logger";
 
-// ── Grace period for ORDER_NOT_FOUND ──────────────────────────────────────────
-// Gate.io occasionally returns "order not found" for trigger orders that were
-// just placed (eventual-consistency window). Treating that as terminal would
-// cause the sync loop to wipe valid order IDs and trigger an emergency exit.
-// During the grace period we treat ORDER_NOT_FOUND as transient instead.
-const ORDER_NOT_FOUND_GRACE_MS = 2 * 60 * 1000;
-
-function isInGracePeriod(createdAt: Date | null | undefined): boolean {
-  if (!createdAt) return false;
-  return Date.now() - new Date(createdAt).getTime() < ORDER_NOT_FOUND_GRACE_MS;
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
@@ -79,6 +67,18 @@ export function computeSlLimitPrice(trigger: number, side: string, offsetPct: nu
 }
 
 export let scalperLastSyncAt: Date | null = null;
+
+// ── Grace period for terminal ORDER_NOT_FOUND checks ─────────────────────────
+// Gate.io's order query API can take a few seconds to index a newly placed
+// order. A sync tick that fires during that window gets ORDER_NOT_FOUND and
+// would wrongly treat the order as terminally gone. Skip terminal treatment
+// for any trade that is less than 2 minutes old.
+const GRACE_PERIOD_MS = 2 * 60 * 1000;
+
+function isInGracePeriod(createdAt: Date | string | null | undefined): boolean {
+  if (!createdAt) return false;
+  return Date.now() - new Date(createdAt).getTime() < GRACE_PERIOD_MS;
+}
 
 // ── Compound balance update ───────────────────────────────────────────────────
 
@@ -253,12 +253,7 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("order not found")) {
-        // Grace period: Gate.io sometimes returns "not found" right after placement.
-        // Treat as transient until the trade is older than the grace window.
-        if (isInGracePeriod(trade.createdAt)) {
-          logger.warn({ tradeId: id, orderId }, "CHT live: order not found within grace period — treating as transient");
-          return { filled: false, terminal: false };
-        }
+        if (isInGracePeriod(trade.createdAt)) return { filled: false, terminal: false };
         return { filled: false, terminal: true };
       }
       logger.warn({ tradeId: id, orderId, err: msg }, "CHT live: order check failed");
@@ -700,11 +695,9 @@ async function syncStandardTrade(trade: typeof scalperTradesTable.$inferSelect):
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("order not found")) {
-        // Grace period: Gate.io may not have indexed a freshly-placed order yet.
-        // Treating it as terminal here would null the IDs and trigger emergency exit.
         if (isInGracePeriod(trade.createdAt)) {
           allOrdersTerminal = false;
-          logger.warn({ tradeId: id, orderId, reason }, "Scalper sync: order not found within grace period — treating as transient");
+          logger.info({ tradeId: id, orderId, reason }, "Scalper sync: order not found but within grace period — skipping terminal");
         } else {
           logger.warn({ tradeId: id, orderId, reason }, "Scalper sync: order not found — treating as terminal");
         }
@@ -1023,10 +1016,7 @@ async function syncMicroLiveTrade(trade: typeof scalperTradesTable.$inferSelect)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("order not found")) {
-        if (isInGracePeriod(trade.createdAt)) {
-          logger.warn({ tradeId: id, orderId }, "Micro live: order not found within grace period — treating as transient");
-          return { filled: false, terminal: false };
-        }
+        if (isInGracePeriod(trade.createdAt)) return { filled: false, terminal: false };
         return { filled: false, terminal: true };
       }
       logger.warn({ tradeId: id, orderId, err: msg }, "Micro live: order check failed");
@@ -1262,10 +1252,9 @@ export async function syncAllScalperTrades(): Promise<void> {
 
   logger.debug({ count: openTrades.length }, "Scalper sync: checking open trades");
 
-  // Sequential processing: each trade's sync may credit compoundBalance via a
-  // read-modify-write on scalperConfigTable. Running them concurrently with
-  // Promise.allSettled would let two ticks overlap and double-credit the same
-  // P&L. Sequential keeps the read-modify-write atomic across the batch.
+  // Process trades sequentially — concurrent Promise.allSettled lets two sync
+  // ticks overlap on the same trade, causing double P&L credit on compound
+  // balance when both detect a terminal condition at the same millisecond.
   for (const trade of openTrades) {
     try {
       await syncScalperTrade(trade);
@@ -1273,38 +1262,22 @@ export async function syncAllScalperTrades(): Promise<void> {
       logger.error({ err, tradeId: trade.id }, "Scalper sync: trade sync failed");
     }
   }
+
   scalperLastSyncAt = new Date();
 }
 
 let scalperSyncInterval: ReturnType<typeof setInterval> | null = null;
 
-// Reentrancy guard: at the new 10s tick rate, a single sync run can occasionally
-// take longer than 10s (slow Gate.io response, many open trades). Without this
-// guard, setInterval would start a second concurrent run, defeating the
-// sequential-loop fix and re-introducing the compoundBalance double-credit
-// race (two ticks both seeing the same trade as needing to close).
-let scalperSyncRunning = false;
-
-async function runScalperSyncTick(): Promise<void> {
-  if (scalperSyncRunning) {
-    logger.debug("Scalper sync: previous tick still running, skipping");
-    return;
-  }
-  scalperSyncRunning = true;
-  try {
-    await syncAllScalperTrades();
-  } catch (err) {
-    logger.error({ err }, "Scalper sync: tick failed");
-  } finally {
-    scalperSyncRunning = false;
-  }
-}
-
 export function startScalperSyncLoop(intervalMs = 30_000): void {
   if (scalperSyncInterval) return;
 
-  setTimeout(() => { void runScalperSyncTick(); }, 5000);
-  scalperSyncInterval = setInterval(() => { void runScalperSyncTick(); }, intervalMs);
+  setTimeout(() => {
+    syncAllScalperTrades().catch((err) => logger.error({ err }, "Scalper sync: initial run failed"));
+  }, 5000);
+
+  scalperSyncInterval = setInterval(() => {
+    syncAllScalperTrades().catch((err) => logger.error({ err }, "Scalper sync: interval failed"));
+  }, intervalMs);
 
   logger.info({ intervalMs }, "Scalper sync loop started");
 }
