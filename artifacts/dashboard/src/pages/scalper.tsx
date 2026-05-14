@@ -398,7 +398,7 @@ function MrxStatusPanel() {
       {/* Fixed parameters */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs font-mono">
         {[
-          { label: "TIMEFRAME", value: "3m candles" },
+          { label: "TIMEFRAME", value: "1m + 3m candles" },
           { label: "DIRECTION", value: "LONG ONLY" },
           { label: "TP TARGET", value: "+0.28%" },
           { label: "SL GUARD", value: "−2.5%" },
@@ -1377,7 +1377,7 @@ export function ScalperPage() {
               className={`p-3 text-left border transition-colors ${field("strategy", "bb_rsi") === "mrx-hybrid" ? "border-orange-500 bg-orange-500/10" : "border-border bg-secondary/30 hover:border-border/80"}`}
             >
               <div className={`text-sm font-bold mb-1 font-mono ${field("strategy", "bb_rsi") === "mrx-hybrid" ? "text-orange-400" : "text-muted-foreground"}`}>MRX — Mean Reversion Xpress</div>
-              <div className="text-xs text-muted-foreground leading-relaxed">Oversold snap on 3m candles. 7-gate evaluator (BB lower + RSI ≤ 25 + ATR + BB width + vol spike + HTF EMA + pump guard). LONG ONLY · TP +0.28% · SL −2.5%.</div>
+              <div className="text-xs text-muted-foreground leading-relaxed">Oversold snap on 1m + 3m candles (1m evaluated first). 7-gate evaluator (BB lower + RSI ≤ 25 + ATR + BB width + vol spike + HTF EMA + pump guard). LONG ONLY · TP +0.28% · SL −2.5%.</div>
             </button>
           </div>
         </div>
@@ -1534,7 +1534,7 @@ export function ScalperPage() {
                     <div className="border border-orange-500/40 bg-orange-500/5 px-3 py-2.5 space-y-2">
                       <div className="text-orange-300 text-xs font-bold tracking-wider">MRX FIXED PARAMETERS</div>
                       <div className="text-xs text-muted-foreground leading-relaxed">
-                        Hardcoded TP/SL tuned for the MRX oversold-snap setup on 3m candles. These values are fixed and cannot be adjusted — the engine is calibrated around them.
+                        Hardcoded TP/SL tuned for the MRX oversold-snap setup on 1m + 3m candles. These values are fixed and cannot be adjusted — the engine is calibrated around them.
                       </div>
                       <div className="grid grid-cols-2 gap-2 text-xs font-mono">
                         <div className="bg-green-500/10 border border-green-500/30 px-2 py-1.5">

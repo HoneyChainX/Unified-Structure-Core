@@ -1,14 +1,14 @@
 /**
  * Scalper scan loop — runs every 2.5 minutes.
  *
- * Live monitor: always scans all 6 timeframes (3m/5m/15m/1h/4h/1d) across
- *   BB+RSI, SMC MSS+OB, and CHT — results stored in memory and exposed via
+ * Live monitor: always scans all 7 timeframes (1m/3m/5m/15m/1h/4h/1d) across
+ *   BB+RSI, SMC MSS+OB, CHT, and MRX — results stored in memory and exposed via
  *   GET /api/scalper/scan/live.
  *
  * Execution: only fires on timeframes appropriate for the configured TP mode:
- *   - Fixed USDT TP  → 3m, 5m          (scalp)
+ *   - Fixed USDT TP  → 1m, 3m, 5m       (scalp — MRX evaluates 1m+3m internally)
  *   - Fixed % TP     → 15m, 1h, 4h, 1d  (swing)
- *   - Auto/dynamic BB → all six
+ *   - Auto/dynamic BB → all seven
  */
 
 import { db, scalperConfigTable } from "@workspace/db";
@@ -117,7 +117,7 @@ export interface LiveScanEntry {
 export let scalperLiveScanResults: LiveScanEntry[] = [];
 export let scalperLiveScanAt: Date | null = null;
 
-// ── Live scan (display only — always scans all 6 TFs) ─────────────────────
+// ── Live scan (display only — always scans all 7 TFs) ─────────────────────
 
 export async function runLiveDualScan(): Promise<void> {
   const [config] = await db.select().from(scalperConfigTable).limit(1);
@@ -153,7 +153,7 @@ export async function runLiveDualScan(): Promise<void> {
     emaPeriod: config?.emaPeriod ?? 200,
   };
 
-  // Fetch BTC reference candles for all 6 TFs once — shared correlation ref for CHT
+  // Fetch BTC reference candles for all 7 TFs once — shared correlation ref for CHT
   const btcRefMap = new Map<string, Candle[]>();
   await Promise.allSettled(
     (ALL_LIVE_TFS as readonly string[]).map(async (tf) => {

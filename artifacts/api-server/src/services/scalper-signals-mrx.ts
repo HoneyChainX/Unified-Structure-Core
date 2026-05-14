@@ -17,7 +17,7 @@
  *
  * Fixed risk params:
  *   TP = +0.28%  |  SL = −2.5%  |  Position size = 100% available USDT (live)
- *   Timeframe: 3m candles  |  Symbol universe: Top 10 by USDT volume
+ *   Timeframes: 1m + 3m candles (1m evaluated first)  |  Symbol universe: Top 10 by USDT volume
  *
  * Safeguards:
  *   - Dynamic symbol blacklist (DB-driven per close reason & P&L):
