@@ -36,24 +36,24 @@ import { logger } from "../lib/logger";
 
 // ── Timeframe configuration ───────────────────────────────────────────────
 
-/** All timeframes scanned by the live monitor (always all 6). */
-const ALL_LIVE_TFS = ["3m", "5m", "15m", "1h", "4h", "1d"] as const;
+/** All timeframes scanned by the live monitor (always all 7). */
+const ALL_LIVE_TFS = ["1m", "3m", "5m", "15m", "1h", "4h", "1d"] as const;
 
 /** Candle counts per timeframe — sufficient for every indicator window. */
 const CANDLE_COUNTS: Record<string, number> = {
-  "3m": 150, "5m": 150, "15m": 150, "1h": 100, "4h": 80, "1d": 60,
+  "1m": 200, "3m": 150, "5m": 150, "15m": 150, "1h": 100, "4h": 80, "1d": 60,
 };
 
 /**
  * Returns the execution-only timeframes for a given config:
- *   - Fixed USDT TP  → ["3m","5m"]
+ *   - Fixed USDT TP  → ["1m","3m","5m"]
  *   - Fixed % TP     → ["15m","1h","4h","1d"]
- *   - Auto/dynamic BB → all six
+ *   - Auto/dynamic BB → all seven
  */
 function getExecutionTimeframes(config: typeof scalperConfigTable.$inferSelect): string[] {
   if (config.dynamicTp) return [...ALL_LIVE_TFS];
   if (config.targetProfitPct != null && config.targetProfitPct > 0) return ["15m", "1h", "4h", "1d"];
-  return ["3m", "5m"];
+  return ["1m", "3m", "5m"];
 }
 
 // ── Execution loop state ────────────────────────────────────────────────────
@@ -104,6 +104,7 @@ export interface LiveScanEntry {
   };
   mrx: {
     detected: boolean;
+    timeframe: string | null;
     rsi: number | null;
     atrPct: number | null;
     volumeRatio: number | null;
@@ -194,7 +195,7 @@ export async function runLiveDualScan(): Promise<void> {
         }
 
         // Display price from the smallest available TF
-        const priceCandles = tfMap.get("5m") ?? tfMap.get("3m") ?? tfMap.get("15m");
+        const priceCandles = tfMap.get("1m") ?? tfMap.get("3m") ?? tfMap.get("5m") ?? tfMap.get("15m");
         const lastClose = priceCandles?.at(-1)?.close ?? 0;
         if (lastClose === 0) return null;
 
@@ -240,13 +241,20 @@ export async function runLiveDualScan(): Promise<void> {
           }
         }
 
-        // MRX: evaluate on 3m/15m/1h candles (all already fetched above)
+        // MRX: evaluate 1m first (faster trigger), fall back to 3m
+        // HTF refs (15m trend, 1h OB) are the same for both primary TFs
+        const mrxC1m  = tfMap.get("1m")  ?? [];
         const mrxC3m  = tfMap.get("3m")  ?? [];
         const mrxC15m = tfMap.get("15m") ?? [];
         const mrxC1h  = tfMap.get("1h")  ?? [];
         let mrxDecision: ReturnType<typeof evaluateMRXSignal> | null = null;
-        if (mrxC3m.length >= 30) {
-          mrxDecision = evaluateMRXSignal(sym, mrxC3m, mrxC15m, mrxC1h);
+        if (mrxC1m.length >= 30) {
+          const d = evaluateMRXSignal(sym, mrxC1m, mrxC15m, mrxC1h, "1m");
+          mrxDecision = d;
+        }
+        if ((!mrxDecision || !mrxDecision.signal) && mrxC3m.length >= 30) {
+          const d = evaluateMRXSignal(sym, mrxC3m, mrxC15m, mrxC1h, "3m");
+          if (!mrxDecision || d.signal) mrxDecision = d;
         }
         const mrxSig = mrxDecision?.signal ?? null;
 
@@ -289,6 +297,7 @@ export async function runLiveDualScan(): Promise<void> {
           },
           mrx: {
             detected: mrxSig != null,
+            timeframe: mrxSig?.timeframe ?? null,
             rsi: mrxDecision?.decision.rsi ?? null,
             atrPct: mrxDecision?.decision.atrPct ?? null,
             volumeRatio: mrxDecision?.decision.volumeRatio ?? null,
@@ -382,7 +391,8 @@ export async function runScalperScan(): Promise<void> {
         timeframe: tf,
       });
     } else if (strategy === MRX_STRATEGY_TAG) {
-      // MRX always runs on 3m only — skip non-3m execution timeframes
+      // MRX scans both 1m and 3m internally — call once on the "3m" iteration
+      // (scanForMRXSignals fetches its own 1m+3m candles regardless of tf loop)
       if (tf !== "3m") continue;
       tfSignals = await scanForMRXSignals({
         symbols: resolvedSymbols!,

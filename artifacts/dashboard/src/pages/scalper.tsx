@@ -268,6 +268,7 @@ interface LiveScanEntry {
   };
   mrx?: {
     detected: boolean;
+    timeframe: string | null;
     rsi: number | null;
     atrPct: number | null;
     inOB: boolean;
@@ -1118,6 +1119,7 @@ export function ScalperPage() {
                           {row.mrx?.detected ? (
                             <span className="inline-flex items-center gap-1 font-bold px-2 py-0.5 border text-orange-300 border-orange-500/50 bg-orange-500/15">
                               <ArrowUpRight className="w-3 h-3" />LONG
+                              {row.mrx.timeframe && <span className="font-normal text-[10px] opacity-60 ml-0.5 border border-current/30 px-1">{row.mrx.timeframe}</span>}
                               {row.mrx.inOB && <span className="font-normal text-[10px] opacity-70 ml-0.5 border border-current/30 px-1">OB</span>}
                               {row.mrx.rsi != null && <span className="font-normal text-[10px] opacity-60 ml-0.5">RSI {row.mrx.rsi.toFixed(0)}</span>}
                               {row.mrx.atrPct != null && <span className="font-normal text-[10px] opacity-50">ATR {row.mrx.atrPct.toFixed(2)}%</span>}

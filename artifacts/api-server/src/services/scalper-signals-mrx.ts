@@ -48,6 +48,8 @@ export const MRX_STRATEGY_TAG = "mrx-hybrid";
 const MRX_SYMBOL_COUNT        = 10;
 const MRX_CANDLE_TF           = "3m";
 const MRX_CANDLE_LIMIT        = 150;
+const MRX_1M_CANDLE_TF        = "1m";
+const MRX_1M_CANDLE_LIMIT     = 200;    // more bars needed for EMA indicators on 1m
 const MRX_HTF_TF              = "15m";
 const MRX_HTF_LIMIT           = 80;
 const MRX_OB_TF               = "1h";
@@ -252,9 +254,10 @@ export interface MRXDecision {
 
 export function evaluateMRXSignal(
   gateSymbol: string,
-  candles3m: Candle[],
+  candlesPrimary: Candle[],
   candles15m: Candle[],
   candles1h: Candle[],
+  timeframe: "1m" | "3m" = "3m",
 ): { signal: ScalperSignal | null; decision: MRXDecision } {
   const symbol = gateSymbol.replace("_USDT", "").replace(/_/g, "");
 
@@ -268,31 +271,41 @@ export function evaluateMRXSignal(
     },
   });
 
-  if (candles3m.length < 30) return failEarly("Insufficient 3m candles");
+  if (candlesPrimary.length < 30) return failEarly(`Insufficient ${timeframe} candles`);
 
-  const closes3m  = candles3m.map((c) => c.close);
-  const volumes3m = candles3m.map((c) => c.volume);
-  const lastClose = closes3m[closes3m.length - 1];
+  // ── Timeframe-specific thresholds ─────────────────────────────────────────
+  // 1m candles have naturally smaller ATR/BBW — use tighter bounds
+  const atrPctMin   = timeframe === "1m" ? 0.1  : 0.3;
+  const atrPctMax   = timeframe === "1m" ? 2.0  : 3.0;
+  const bbWidthMin  = timeframe === "1m" ? 0.3  : 0.6;
+  const bbWidthMax  = timeframe === "1m" ? 3.0  : 5.0;
+  // No-pump guard: cover the same ~6-min window regardless of TF
+  // 1m: 6 bars = 6 min | 3m: 2 bars = 6 min
+  const pumpLookback = timeframe === "1m" ? 7 : 3;  // index from end (length - n)
+
+  const closes  = candlesPrimary.map((c) => c.close);
+  const volumes = candlesPrimary.map((c) => c.volume);
+  const lastClose = closes[closes.length - 1];
 
   // ── Indicators ────────────────────────────────────────────────────────────
-  const bb          = computeBB(closes3m, 20, 2.0);
-  const rsi         = computeRSI(closes3m, 14);
-  const prevRsi     = computeRSI(closes3m.slice(0, -1), 14);
-  const volumeRatio = computeVolumeRatio(volumes3m);
-  const atr         = computeATR(candles3m, 14);
+  const bb          = computeBB(closes, 20, 2.0);
+  const rsi         = computeRSI(closes, 14);
+  const prevRsi     = computeRSI(closes.slice(0, -1), 14);
+  const volumeRatio = computeVolumeRatio(volumes);
+  const atr         = computeATR(candlesPrimary, 14);
   const atrPct      = lastClose > 0 ? (atr / lastClose) * 100 : 0;
   const bbWidthPct  = bb.mid > 0 ? ((bb.upper - bb.lower) / bb.mid) * 100 : 0;
 
-  // HTF (15m) EMA
+  // HTF (15m) EMA — same filter for both 1m and 3m
   const closes15m = candles15m.map((c) => c.close);
   const htfEma20  = closes15m.length >= 20 ? computeEMA(closes15m, 20) : lastClose;
   const htfEma50  = closes15m.length >= 50 ? computeEMA(closes15m, 50) : lastClose;
 
-  // No-pump guard: last 2 × 3m bars ≈ 6 min
-  const pumpRef      = closes3m.length >= 3 ? closes3m[closes3m.length - 3] : lastClose;
+  // No-pump guard: look back N bars to cover ~6 min
+  const pumpRef      = closes.length >= pumpLookback ? closes[closes.length - pumpLookback] : lastClose;
   const pumpChange5m = pumpRef > 0 ? ((lastClose - pumpRef) / pumpRef) * 100 : 0;
 
-  // OB confluence (1h)
+  // OB confluence (1h) — same for both TFs
   const inOB = detectBullish1hOB(candles1h, lastClose);
   const effectiveRsiCap = inOB ? 28 : 25;
 
@@ -311,7 +324,7 @@ export function evaluateMRXSignal(
       signal: null,
       decision: {
         ...base, accepted: false,
-        reason: `Gate 1: close ${lastClose.toFixed(6)} vs bbLower×1.0005 ${(bb.lower * 1.0005).toFixed(6)}; RSI ${rsi.toFixed(1)} vs cap ${effectiveRsiCap}`,
+        reason: `Gate 1 [${timeframe}]: close ${lastClose.toFixed(6)} vs bbLower×1.0005 ${(bb.lower * 1.0005).toFixed(6)}; RSI ${rsi.toFixed(1)} vs cap ${effectiveRsiCap}`,
       },
     };
   }
@@ -322,29 +335,29 @@ export function evaluateMRXSignal(
       signal: null,
       decision: {
         ...base, accepted: false,
-        reason: `Gate 2: prevRSI ${prevRsi.toFixed(1)} > 28 — no oversold streak`,
+        reason: `Gate 2 [${timeframe}]: prevRSI ${prevRsi.toFixed(1)} > 28 — no oversold streak`,
       },
     };
   }
 
-  // ── Gate 3: ATR% in [0.3%, 3.0%] ────────────────────────────────────────
-  if (atrPct < 0.3 || atrPct > 3.0) {
+  // ── Gate 3: ATR% in range ─────────────────────────────────────────────────
+  if (atrPct < atrPctMin || atrPct > atrPctMax) {
     return {
       signal: null,
       decision: {
         ...base, accepted: false,
-        reason: `Gate 3: ATR% ${atrPct.toFixed(3)} not in [0.3, 3.0]`,
+        reason: `Gate 3 [${timeframe}]: ATR% ${atrPct.toFixed(3)} not in [${atrPctMin}, ${atrPctMax}]`,
       },
     };
   }
 
-  // ── Gate 4: BB width in [0.6%, 5.0%] ────────────────────────────────────
-  if (bbWidthPct < 0.6 || bbWidthPct > 5.0) {
+  // ── Gate 4: BB width in range ─────────────────────────────────────────────
+  if (bbWidthPct < bbWidthMin || bbWidthPct > bbWidthMax) {
     return {
       signal: null,
       decision: {
         ...base, accepted: false,
-        reason: `Gate 4: BBWidth% ${bbWidthPct.toFixed(3)} not in [0.6, 5.0]`,
+        reason: `Gate 4 [${timeframe}]: BBWidth% ${bbWidthPct.toFixed(3)} not in [${bbWidthMin}, ${bbWidthMax}]`,
       },
     };
   }
@@ -355,7 +368,7 @@ export function evaluateMRXSignal(
       signal: null,
       decision: {
         ...base, accepted: false,
-        reason: `Gate 5 (HARD): volumeRatio ${volumeRatio.toFixed(3)} < 1.2`,
+        reason: `Gate 5 [${timeframe}] (HARD): volumeRatio ${volumeRatio.toFixed(3)} < 1.2`,
       },
     };
   }
@@ -366,7 +379,7 @@ export function evaluateMRXSignal(
       signal: null,
       decision: {
         ...base, accepted: false,
-        reason: `Gate 6: 15m EMA20 ${htfEma20.toFixed(6)} >1.5% below EMA50 ${htfEma50.toFixed(6)} — hard downtrend`,
+        reason: `Gate 6 [${timeframe}]: 15m EMA20 ${htfEma20.toFixed(6)} >1.5% below EMA50 ${htfEma50.toFixed(6)} — hard downtrend`,
       },
     };
   }
@@ -377,7 +390,7 @@ export function evaluateMRXSignal(
       signal: null,
       decision: {
         ...base, accepted: false,
-        reason: `Gate 7: 5m change ${pumpChange5m.toFixed(2)}% < −1.5% — flash crash / dump in progress`,
+        reason: `Gate 7 [${timeframe}]: ${pumpLookback - 1}×${timeframe} change ${pumpChange5m.toFixed(2)}% < −1.5% — flash crash / dump in progress`,
       },
     };
   }
@@ -397,11 +410,11 @@ export function evaluateMRXSignal(
       tpPrice,
       slPrice,
       strategy:  MRX_STRATEGY_TAG,
-      timeframe: "3m",
+      timeframe,
     },
     decision: {
       ...base, accepted: true,
-      reason: `PASS — OB=${inOB ? `YES (RSI cap→${effectiveRsiCap})` : "NO"} ATR%=${atrPct.toFixed(2)} BBW%=${bbWidthPct.toFixed(2)} volR=${volumeRatio.toFixed(2)} 5mChg=${pumpChange5m.toFixed(2)}%`,
+      reason: `PASS [${timeframe}] — OB=${inOB ? `YES (RSI cap→${effectiveRsiCap})` : "NO"} ATR%=${atrPct.toFixed(2)} BBW%=${bbWidthPct.toFixed(2)} volR=${volumeRatio.toFixed(2)} chg=${pumpChange5m.toFixed(2)}%`,
     },
   };
 }
@@ -482,37 +495,49 @@ export async function scanForMRXSignals(params: {
         return fetchCandles(gateSymbol, tf, limit);
       };
 
-      const [candles3m, candles15m, candles1h] = await Promise.all([
+      const [candles1m, candles3m, candles15m, candles1h] = await Promise.all([
+        get(MRX_1M_CANDLE_TF, MRX_1M_CANDLE_LIMIT),
         get(MRX_CANDLE_TF, MRX_CANDLE_LIMIT),
         get(MRX_HTF_TF, MRX_HTF_LIMIT),
         get(MRX_OB_TF, MRX_OB_LIMIT),
       ]);
 
-      const { signal, decision } = evaluateMRXSignal(gateSymbol, candles3m, candles15m, candles1h);
+      // Evaluate 1m first (faster trigger), fall back to 3m
+      const tfsToTry: Array<{ candles: Candle[]; tf: "1m" | "3m" }> = [
+        { candles: candles1m, tf: "1m" },
+        { candles: candles3m, tf: "3m" },
+      ];
 
-      if (decision.accepted) {
-        logger.info(
-          {
-            gateSymbol,
-            rsi: decision.rsi.toFixed(1),
-            prevRsi: decision.prevRsi.toFixed(1),
-            atrPct: decision.atrPct.toFixed(3),
-            bbWidthPct: decision.bbWidthPct.toFixed(3),
-            volumeRatio: decision.volumeRatio.toFixed(3),
-            pumpChange5m: decision.pumpChange5m.toFixed(2),
-            inOB: decision.inOB,
-            effectiveRsiCap: decision.effectiveRsiCap,
-            entry: decision.entryPrice,
-            tp: decision.tpPrice.toFixed(6),
-            sl: decision.slPrice.toFixed(6),
-          },
-          `MRX SIGNAL ACCEPTED: ${gateSymbol} — ${decision.reason}`,
-        );
-      } else {
-        logger.debug({ gateSymbol, reason: decision.reason }, "MRX: signal rejected");
+      let acceptedSignal: ScalperSignal | null = null;
+      for (const { candles, tf } of tfsToTry) {
+        const { signal, decision } = evaluateMRXSignal(gateSymbol, candles, candles15m, candles1h, tf);
+        if (decision.accepted) {
+          logger.info(
+            {
+              gateSymbol,
+              tf,
+              rsi: decision.rsi.toFixed(1),
+              prevRsi: decision.prevRsi.toFixed(1),
+              atrPct: decision.atrPct.toFixed(3),
+              bbWidthPct: decision.bbWidthPct.toFixed(3),
+              volumeRatio: decision.volumeRatio.toFixed(3),
+              pumpChange5m: decision.pumpChange5m.toFixed(2),
+              inOB: decision.inOB,
+              effectiveRsiCap: decision.effectiveRsiCap,
+              entry: decision.entryPrice,
+              tp: decision.tpPrice.toFixed(6),
+              sl: decision.slPrice.toFixed(6),
+            },
+            `MRX SIGNAL ACCEPTED: ${gateSymbol}@${tf} — ${decision.reason}`,
+          );
+          acceptedSignal = signal;
+          break; // first hit per symbol wins — don't double-fire on same asset
+        } else {
+          logger.debug({ gateSymbol, tf, reason: decision.reason }, "MRX: signal rejected");
+        }
       }
 
-      return signal;
+      return acceptedSignal;
     }),
   );
 
