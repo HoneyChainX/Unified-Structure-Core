@@ -1445,6 +1445,22 @@ components:
           nullable: true
         longOnly:
           type: boolean
+        mrxAtrPctMin1m:
+          type: number
+        mrxAtrPctMax1m:
+          type: number
+        mrxBbWidthMin1m:
+          type: number
+        mrxBbWidthMax1m:
+          type: number
+        mrxAtrPctMin3m:
+          type: number
+        mrxAtrPctMax3m:
+          type: number
+        mrxBbWidthMin3m:
+          type: number
+        mrxBbWidthMax3m:
+          type: number
         updatedAt:
           type: string
           format: date-time
@@ -1465,6 +1481,14 @@ components:
         - volumeSpikeMultiplier
         - compoundingEnabled
         - longOnly
+        - mrxAtrPctMin1m
+        - mrxAtrPctMax1m
+        - mrxBbWidthMin1m
+        - mrxBbWidthMax1m
+        - mrxAtrPctMin3m
+        - mrxAtrPctMax3m
+        - mrxBbWidthMin3m
+        - mrxBbWidthMax3m
         - updatedAt
 
     ScalperConfigPatch:
@@ -1503,6 +1527,22 @@ components:
           nullable: true
         longOnly:
           type: boolean
+        mrxAtrPctMin1m:
+          type: number
+        mrxAtrPctMax1m:
+          type: number
+        mrxBbWidthMin1m:
+          type: number
+        mrxBbWidthMax1m:
+          type: number
+        mrxAtrPctMin3m:
+          type: number
+        mrxAtrPctMax3m:
+          type: number
+        mrxBbWidthMin3m:
+          type: number
+        mrxBbWidthMax3m:
+          type: number
 
     ScalperStatus:
       type: object

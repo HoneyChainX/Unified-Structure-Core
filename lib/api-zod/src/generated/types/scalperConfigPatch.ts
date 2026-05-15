@@ -23,4 +23,12 @@ export interface ScalperConfigPatch {
   compoundingEnabled?: boolean;
   compoundBalance?: number | null;
   longOnly?: boolean;
+  mrxAtrPctMin1m?: number;
+  mrxAtrPctMax1m?: number;
+  mrxBbWidthMin1m?: number;
+  mrxBbWidthMax1m?: number;
+  mrxAtrPctMin3m?: number;
+  mrxAtrPctMax3m?: number;
+  mrxBbWidthMin3m?: number;
+  mrxBbWidthMax3m?: number;
 }

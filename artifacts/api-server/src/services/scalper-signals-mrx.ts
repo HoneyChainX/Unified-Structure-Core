@@ -7,8 +7,8 @@
  * Entry conditions (ALL must pass):
  *   1. lastClose ≤ BB_lower × 1.0005  AND  RSI ≤ 25  (or ≤ 28 with OB confluence)
  *   2. prevRSI ≤ 28 on prior bar (oversold streak)
- *   3. ATR% in [0.3%, 3.0%] — not dead calm, not blow-up volatility
- *   4. BB width in [0.6%, 5.0%] — adequate compression / no extreme expansion
+ *   3. ATR% in [0.05%, 2.0%] (1m) / [0.3%, 3.0%] (3m) — DB-configurable
+ *   4. BB width in [0.15%, 3.0%] (1m) / [0.6%, 5.0%] (3m) — DB-configurable
  *   5. volumeRatio ≥ 1.2 (HARD gate — no dead-volume entries)
  *   6. 15m HTF: EMA20 not more than 1.5% below EMA50 (no hard downtrend)
  *   7. No-pump guard: last 2×3m price change ≥ −1.5% (no flash crash entry)
@@ -26,7 +26,7 @@
  *   - Full decision log for every symbol evaluated (all 9 filter values + reason)
  */
 
-import { db, scalperTradesTable } from "@workspace/db";
+import { db, scalperTradesTable, scalperConfigTable } from "@workspace/db";
 import { eq, inArray, and, gte, desc } from "drizzle-orm";
 import {
   Candle,
@@ -252,12 +252,35 @@ export interface MRXDecision {
   slPrice: number;
 }
 
+export interface MRXThresholds {
+  atrPctMin1m: number;
+  atrPctMax1m: number;
+  bbWidthMin1m: number;
+  bbWidthMax1m: number;
+  atrPctMin3m: number;
+  atrPctMax3m: number;
+  bbWidthMin3m: number;
+  bbWidthMax3m: number;
+}
+
+export const MRX_DEFAULT_THRESHOLDS: MRXThresholds = {
+  atrPctMin1m: 0.05,
+  atrPctMax1m: 2.0,
+  bbWidthMin1m: 0.15,
+  bbWidthMax1m: 3.0,
+  atrPctMin3m: 0.3,
+  atrPctMax3m: 3.0,
+  bbWidthMin3m: 0.6,
+  bbWidthMax3m: 5.0,
+};
+
 export function evaluateMRXSignal(
   gateSymbol: string,
   candlesPrimary: Candle[],
   candles15m: Candle[],
   candles1h: Candle[],
   timeframe: "1m" | "3m" = "3m",
+  thresholds: MRXThresholds = MRX_DEFAULT_THRESHOLDS,
 ): { signal: ScalperSignal | null; decision: MRXDecision } {
   const symbol = gateSymbol.replace("_USDT", "").replace(/_/g, "");
 
@@ -273,12 +296,11 @@ export function evaluateMRXSignal(
 
   if (candlesPrimary.length < 30) return failEarly(`Insufficient ${timeframe} candles`);
 
-  // ── Timeframe-specific thresholds ─────────────────────────────────────────
-  // 1m candles have naturally smaller ATR/BBW — use tighter bounds
-  const atrPctMin   = timeframe === "1m" ? 0.1  : 0.3;
-  const atrPctMax   = timeframe === "1m" ? 2.0  : 3.0;
-  const bbWidthMin  = timeframe === "1m" ? 0.3  : 0.6;
-  const bbWidthMax  = timeframe === "1m" ? 3.0  : 5.0;
+  // ── Timeframe-specific thresholds (DB-configurable, falls back to defaults) ──
+  const atrPctMin  = timeframe === "1m" ? thresholds.atrPctMin1m  : thresholds.atrPctMin3m;
+  const atrPctMax  = timeframe === "1m" ? thresholds.atrPctMax1m  : thresholds.atrPctMax3m;
+  const bbWidthMin = timeframe === "1m" ? thresholds.bbWidthMin1m : thresholds.bbWidthMin3m;
+  const bbWidthMax = timeframe === "1m" ? thresholds.bbWidthMax1m : thresholds.bbWidthMax3m;
   // No-pump guard: cover the same ~6-min window regardless of TF
   // 1m: 6 bars = 6 min | 3m: 2 bars = 6 min
   const pumpLookback = timeframe === "1m" ? 7 : 3;  // index from end (length - n)
@@ -420,11 +442,42 @@ export function evaluateMRXSignal(
 }
 
 // ── Full MRX scan ─────────────────────────────────────────────────────────────
+export async function loadMRXThresholdsFromConfig(): Promise<MRXThresholds> {
+  try {
+    const [cfg] = await db.select({
+      mrxAtrPctMin1m:  scalperConfigTable.mrxAtrPctMin1m,
+      mrxAtrPctMax1m:  scalperConfigTable.mrxAtrPctMax1m,
+      mrxBbWidthMin1m: scalperConfigTable.mrxBbWidthMin1m,
+      mrxBbWidthMax1m: scalperConfigTable.mrxBbWidthMax1m,
+      mrxAtrPctMin3m:  scalperConfigTable.mrxAtrPctMin3m,
+      mrxAtrPctMax3m:  scalperConfigTable.mrxAtrPctMax3m,
+      mrxBbWidthMin3m: scalperConfigTable.mrxBbWidthMin3m,
+      mrxBbWidthMax3m: scalperConfigTable.mrxBbWidthMax3m,
+    }).from(scalperConfigTable).limit(1);
+    if (!cfg) return MRX_DEFAULT_THRESHOLDS;
+    return {
+      atrPctMin1m:  cfg.mrxAtrPctMin1m,
+      atrPctMax1m:  cfg.mrxAtrPctMax1m,
+      bbWidthMin1m: cfg.mrxBbWidthMin1m,
+      bbWidthMax1m: cfg.mrxBbWidthMax1m,
+      atrPctMin3m:  cfg.mrxAtrPctMin3m,
+      atrPctMax3m:  cfg.mrxAtrPctMax3m,
+      bbWidthMin3m: cfg.mrxBbWidthMin3m,
+      bbWidthMax3m: cfg.mrxBbWidthMax3m,
+    };
+  } catch (err) {
+    logger.warn({ err }, "MRX: failed to load thresholds from DB — falling back to defaults");
+    return MRX_DEFAULT_THRESHOLDS;
+  }
+}
+
 export async function scanForMRXSignals(params: {
   /** Override symbol list — skips top-10 fetch when provided. */
   symbols?: string[];
   /** Pre-fetched candle map keyed "GATE_SYMBOL:tf" — avoids duplicate API calls. */
   candleCache?: Map<string, Candle[]>;
+  /** Threshold overrides — loaded from DB when not provided. */
+  thresholds?: MRXThresholds;
 }): Promise<ScalperSignal[]> {
   // ── Rolling WR check before each cycle ────────────────────────────────────
   await checkMrxWinRate();
@@ -432,6 +485,9 @@ export async function scanForMRXSignals(params: {
     logger.warn("MRX: scanner auto-paused — skipping cycle (POST /api/scalper/mrx/resume to re-enable)");
     return [];
   }
+
+  // ── Load thresholds (DB-configurable, fall back to defaults) ─────────────
+  const thresholds = params.thresholds ?? await loadMRXThresholdsFromConfig();
 
   // ── Resolve symbol universe ───────────────────────────────────────────────
   let symbols: string[];
@@ -510,7 +566,7 @@ export async function scanForMRXSignals(params: {
 
       let acceptedSignal: ScalperSignal | null = null;
       for (const { candles, tf } of tfsToTry) {
-        const { signal, decision } = evaluateMRXSignal(gateSymbol, candles, candles15m, candles1h, tf);
+        const { signal, decision } = evaluateMRXSignal(gateSymbol, candles, candles15m, candles1h, tf, thresholds);
         if (decision.accepted) {
           logger.info(
             {

@@ -70,6 +70,17 @@ export const scalperConfigTable = pgTable("scalper_config", {
   // Strategy engine: "bb_rsi" (default BB+RSI+volume) or "smc_mss" (MSS+OB+Fib)
   strategy: text("strategy").notNull().default("bb_rsi"),
 
+  // MRX volatility filter thresholds — tunable per timeframe
+  // 1m defaults are looser than 3m because 1m candles are naturally smaller
+  mrxAtrPctMin1m: real("mrx_atr_pct_min_1m").notNull().default(0.05),
+  mrxAtrPctMax1m: real("mrx_atr_pct_max_1m").notNull().default(2.0),
+  mrxBbWidthMin1m: real("mrx_bb_width_min_1m").notNull().default(0.15),
+  mrxBbWidthMax1m: real("mrx_bb_width_max_1m").notNull().default(3.0),
+  mrxAtrPctMin3m: real("mrx_atr_pct_min_3m").notNull().default(0.3),
+  mrxAtrPctMax3m: real("mrx_atr_pct_max_3m").notNull().default(3.0),
+  mrxBbWidthMin3m: real("mrx_bb_width_min_3m").notNull().default(0.6),
+  mrxBbWidthMax3m: real("mrx_bb_width_max_3m").notNull().default(5.0),
+
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

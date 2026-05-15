@@ -288,6 +288,14 @@ export const GetScalperConfigResponse = zod.object({
   compoundingEnabled: zod.boolean(),
   compoundBalance: zod.number().nullish(),
   longOnly: zod.boolean(),
+  mrxAtrPctMin1m: zod.number(),
+  mrxAtrPctMax1m: zod.number(),
+  mrxBbWidthMin1m: zod.number(),
+  mrxBbWidthMax1m: zod.number(),
+  mrxAtrPctMin3m: zod.number(),
+  mrxAtrPctMax3m: zod.number(),
+  mrxBbWidthMin3m: zod.number(),
+  mrxBbWidthMax3m: zod.number(),
   updatedAt: zod.coerce.date(),
 });
 
@@ -311,6 +319,14 @@ export const UpdateScalperConfigBody = zod.object({
   compoundingEnabled: zod.boolean().optional(),
   compoundBalance: zod.number().nullish(),
   longOnly: zod.boolean().optional(),
+  mrxAtrPctMin1m: zod.number().optional(),
+  mrxAtrPctMax1m: zod.number().optional(),
+  mrxBbWidthMin1m: zod.number().optional(),
+  mrxBbWidthMax1m: zod.number().optional(),
+  mrxAtrPctMin3m: zod.number().optional(),
+  mrxAtrPctMax3m: zod.number().optional(),
+  mrxBbWidthMin3m: zod.number().optional(),
+  mrxBbWidthMax3m: zod.number().optional(),
 });
 
 export const UpdateScalperConfigResponse = zod.object({
@@ -331,6 +347,14 @@ export const UpdateScalperConfigResponse = zod.object({
   compoundingEnabled: zod.boolean(),
   compoundBalance: zod.number().nullish(),
   longOnly: zod.boolean(),
+  mrxAtrPctMin1m: zod.number(),
+  mrxAtrPctMax1m: zod.number(),
+  mrxBbWidthMin1m: zod.number(),
+  mrxBbWidthMax1m: zod.number(),
+  mrxAtrPctMin3m: zod.number(),
+  mrxAtrPctMax3m: zod.number(),
+  mrxBbWidthMin3m: zod.number(),
+  mrxBbWidthMax3m: zod.number(),
   updatedAt: zod.coerce.date(),
 });
 

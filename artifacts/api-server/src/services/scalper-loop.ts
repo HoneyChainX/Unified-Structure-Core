@@ -29,7 +29,7 @@ import {
   CHT_HTF_MAP,
   type CHTMarketContext,
 } from "./scalper-signals-cht";
-import { scanForMRXSignals, evaluateMRXSignal, MRX_STRATEGY_TAG } from "./scalper-signals-mrx";
+import { scanForMRXSignals, evaluateMRXSignal, loadMRXThresholdsFromConfig, MRX_STRATEGY_TAG } from "./scalper-signals-mrx";
 import { executeScalperSignal } from "./scalper-executor";
 import { getMarketStatus } from "./market";
 import { logger } from "../lib/logger";
@@ -121,6 +121,9 @@ export let scalperLiveScanAt: Date | null = null;
 
 export async function runLiveDualScan(): Promise<void> {
   const [config] = await db.select().from(scalperConfigTable).limit(1);
+
+  // Load MRX thresholds once per scan cycle
+  const mrxThresholds = await loadMRXThresholdsFromConfig();
 
   const scanPoolSize = config?.scanPoolSize ?? 20;
 
@@ -249,11 +252,11 @@ export async function runLiveDualScan(): Promise<void> {
         const mrxC1h  = tfMap.get("1h")  ?? [];
         let mrxDecision: ReturnType<typeof evaluateMRXSignal> | null = null;
         if (mrxC1m.length >= 30) {
-          const d = evaluateMRXSignal(sym, mrxC1m, mrxC15m, mrxC1h, "1m");
+          const d = evaluateMRXSignal(sym, mrxC1m, mrxC15m, mrxC1h, "1m", mrxThresholds);
           mrxDecision = d;
         }
         if ((!mrxDecision || !mrxDecision.signal) && mrxC3m.length >= 30) {
-          const d = evaluateMRXSignal(sym, mrxC3m, mrxC15m, mrxC1h, "3m");
+          const d = evaluateMRXSignal(sym, mrxC3m, mrxC15m, mrxC1h, "3m", mrxThresholds);
           if (!mrxDecision || d.signal) mrxDecision = d;
         }
         const mrxSig = mrxDecision?.signal ?? null;

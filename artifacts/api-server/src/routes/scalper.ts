@@ -43,20 +43,48 @@ router.put("/config", async (req, res): Promise<void> => {
     "symbolAllowlist",
     "scanPoolSize",
     "strategy",
+    "mrxAtrPctMin1m", "mrxAtrPctMax1m", "mrxBbWidthMin1m", "mrxBbWidthMax1m",
+    "mrxAtrPctMin3m", "mrxAtrPctMax3m", "mrxBbWidthMin3m", "mrxBbWidthMax3m",
   ];
   const update: Record<string, unknown> = { updatedAt: new Date() };
   for (const key of allowed) {
     if (key in body && body[key] !== undefined) update[key] = body[key];
   }
 
-  if (body["compoundingEnabled"] === true) {
-    const [existing] = await db.select().from(scalperConfigTable).limit(1);
-    if (existing && existing.compoundBalance == null) {
-      update["compoundBalance"] = existing.positionSizeUsdt;
+  // Validate MRX threshold bounds: non-negative, and min ≤ max.
+  // Loads existing config so a partial update (only min or only max) is still
+  // checked against the persisted counterpart.
+  const mrxExisting = await db.select().from(scalperConfigTable).limit(1).then((r) => r[0] ?? null);
+  const mrxPairs: Array<[string, string, keyof typeof mrxExisting]> = [
+    ["mrxAtrPctMin1m",  "mrxAtrPctMax1m",  "mrxAtrPctMin1m"],
+    ["mrxBbWidthMin1m", "mrxBbWidthMax1m", "mrxBbWidthMin1m"],
+    ["mrxAtrPctMin3m",  "mrxAtrPctMax3m",  "mrxAtrPctMin3m"],
+    ["mrxBbWidthMin3m", "mrxBbWidthMax3m", "mrxBbWidthMin3m"],
+  ];
+  for (const [minKey, maxKey] of mrxPairs) {
+    const minVal = update[minKey] !== undefined ? (update[minKey] as number) : (mrxExisting ? (mrxExisting[minKey as keyof typeof mrxExisting] as number) : undefined);
+    const maxVal = update[maxKey] !== undefined ? (update[maxKey] as number) : (mrxExisting ? (mrxExisting[maxKey as keyof typeof mrxExisting] as number) : undefined);
+    if (minVal !== undefined && minVal < 0) {
+      res.status(400).json({ error: `${minKey} must be ≥ 0` });
+      return;
+    }
+    if (maxVal !== undefined && maxVal < 0) {
+      res.status(400).json({ error: `${maxKey} must be ≥ 0` });
+      return;
+    }
+    if (minVal !== undefined && maxVal !== undefined && minVal > maxVal) {
+      res.status(400).json({ error: `${minKey} must be ≤ ${maxKey}` });
+      return;
     }
   }
 
-  const [existing] = await db.select().from(scalperConfigTable).limit(1);
+  if (body["compoundingEnabled"] === true) {
+    if (mrxExisting && mrxExisting.compoundBalance == null) {
+      update["compoundBalance"] = mrxExisting.positionSizeUsdt;
+    }
+  }
+
+  const [existing] = mrxExisting ? [mrxExisting] : await db.select().from(scalperConfigTable).limit(1);
   let config;
   if (!existing) {
     [config] = await db.insert(scalperConfigTable).values({ id: 1, ...update }).returning();
