@@ -355,6 +355,79 @@ interface MrxStatusData {
   blacklistCount: number;
 }
 
+interface MrxTfEntry {
+  label: string;
+  count: number;
+  wins: number;
+  losses: number;
+  winRate: number | null;
+  totalPnl: number;
+  avgPnl: number | null;
+  bestPnl: number | null;
+  worstPnl: number | null;
+}
+
+function MrxPerformancePanel({ data }: { data: MrxTfEntry[] }) {
+  if (!data.length) {
+    return (
+      <div className="px-4 pb-4">
+        <div className="border border-orange-500/20 bg-orange-500/5 px-4 py-3 text-xs font-mono text-muted-foreground">
+          <span className="text-orange-400/70 font-bold tracking-widest">MRX PERFORMANCE</span>
+          <span className="ml-3 opacity-60">No closed MRX trades yet</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-4 pb-4 space-y-2">
+      <div className="text-[10px] text-muted-foreground tracking-widest font-bold text-orange-400/80">
+        MRX PERFORMANCE BY TIMEFRAME
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {data.map((row) => {
+          const wr = row.winRate != null ? row.winRate * 100 : null;
+          const wrGood = wr != null && wr >= 50;
+          const avgGood = (row.avgPnl ?? 0) >= 0;
+          return (
+            <div key={row.label} className="border border-orange-500/20 bg-orange-500/5 px-3 py-2.5 font-mono">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold text-orange-300 uppercase tracking-widest">{row.label}</span>
+                <span className="text-[10px] text-muted-foreground">
+                  <span className="text-green-400">{row.wins}W</span>
+                  <span className="mx-1">/</span>
+                  <span className="text-red-400">{row.losses}L</span>
+                  <span className="ml-1 opacity-60">({row.count})</span>
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-[11px]">
+                <div>
+                  <div className="text-[9px] text-muted-foreground tracking-widest mb-0.5">WIN RATE</div>
+                  <div className={`font-bold ${wr != null ? wrGood ? "text-green-400" : "text-red-400" : "text-muted-foreground"}`}>
+                    {wr != null ? `${wr.toFixed(0)}%` : "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[9px] text-muted-foreground tracking-widest mb-0.5">AVG P&L</div>
+                  <div className={`font-bold ${avgGood ? "text-green-400" : "text-red-400"}`}>
+                    {row.avgPnl != null ? `${row.avgPnl >= 0 ? "+" : ""}${row.avgPnl.toFixed(3)}` : "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[9px] text-muted-foreground tracking-widest mb-0.5">TOTAL P&L</div>
+                  <div className={`font-bold ${row.totalPnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+                    {row.totalPnl >= 0 ? "+" : ""}{row.totalPnl.toFixed(3)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function MrxStatusPanel() {
   const [status, setStatus] = useState<MrxStatusData | null>(null);
   const [resuming, setResuming] = useState(false);
@@ -496,6 +569,8 @@ export function ScalperPage() {
   // Closed history: poll every 60s (static data — only grows)
   const { data: closedTrades_, refetch: refetchClosed } = useFetch<ScalperTrade[]>("/api/scalper/trades?status=closed,cancelled&limit=200", 60000);
   const { data: perf, refetch: refetchPerf } = useFetch<ScalperPerformance>("/api/scalper/performance");
+  // Bot analytics for MRX performance breakdown — poll every 60s (slow-moving data)
+  const { data: botAnalytics } = useFetch<{ byMrxTf: MrxTfEntry[] }>("/api/bot/analytics", 60000);
   // Live dual-strategy scan: poll every 30s
   const { data: liveScan } = useFetch<{ results: LiveScanEntry[]; scannedAt: string | null }>("/api/scalper/scan/live", 30000);
 
@@ -1384,6 +1459,9 @@ export function ScalperPage() {
 
         {/* MRX Status panel — shown always so the user can see MRX params and auto-pause state */}
         <MrxStatusPanel />
+
+        {/* MRX Performance — compact timeframe breakdown from bot analytics */}
+        <MrxPerformancePanel data={botAnalytics?.byMrxTf ?? []} />
 
         <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Paper Mode */}
