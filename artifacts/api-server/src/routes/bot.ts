@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db, botConfigTable, tradesTable, signalsTable } from "@workspace/db";
+import { db, botConfigTable, tradesTable, signalsTable, scalperTradesTable } from "@workspace/db";
 import { eq, desc, count, and, inArray, gte, sql } from "drizzle-orm";
 import { getUsdtBalance, cancelPriceTriggeredOrder, getLivePrice, toGateSymbol, placeSpotOrder, fmtForPair, getSpotAccounts } from "../services/gateio";
 import { lastSyncAt } from "../services/sync";
@@ -173,6 +173,24 @@ router.get("/analytics", async (req, res): Promise<void> => {
       .sort((a, b) => b.count - a.count);
   }
 
+  // ── MRX per-timeframe breakdown (from scalper_trades) ────────────────────
+  const mrxRows = await db
+    .select({
+      pnl: scalperTradesTable.pnl,
+      timeframe: scalperTradesTable.timeframe,
+    })
+    .from(scalperTradesTable)
+    .where(and(
+      eq(scalperTradesTable.status, "closed"),
+      eq(scalperTradesTable.strategy, "mrx-hybrid"),
+    ));
+
+  const byMrxTf: Record<string, DimRow> = {};
+  for (const r of mrxRows) {
+    const pnl = r.pnl ?? 0;
+    acc(byMrxTf, r.timeframe ?? "unknown", pnl);
+  }
+
   res.json({
     totalClosed: rows.length,
     byGrade: serialize(byGrade),
@@ -181,6 +199,7 @@ router.get("/analytics", async (req, res): Promise<void> => {
     bySymbol: serialize(bySymbol),
     byDir: serialize(byDir),
     byCloseReason: serialize(byCloseReason),
+    byMrxTf: serialize(byMrxTf),
   });
 });
 

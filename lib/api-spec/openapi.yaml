@@ -1262,6 +1262,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AnalyticsDimEntry"
+        byMrxTf:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnalyticsDimEntry"
       required:
         - totalClosed
         - byGrade
@@ -1270,6 +1274,7 @@ components:
         - bySymbol
         - byDir
         - byCloseReason
+        - byMrxTf
 
     BacktestRequest:
       type: object

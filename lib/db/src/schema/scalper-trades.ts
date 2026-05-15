@@ -35,8 +35,11 @@ export const scalperTradesTable = pgTable("scalper_trades", {
   // CHT break-even: true after TP1 fills and SL is moved to entry price
   breakEvenActivated: boolean("break_even_activated").default(false),
 
-  // Which strategy engine generated this trade ("bb_rsi" | "smc_mss" | "cht")
+  // Which strategy engine generated this trade ("bb_rsi" | "smc_mss" | "cht" | "mrx-hybrid")
   strategy: text("strategy"),
+
+  // Timeframe the signal was detected on (e.g. "1m", "3m", "5m") — set for MRX and scalper signals
+  timeframe: text("timeframe"),
 
   closePrice: real("close_price"),
   closeReason: text("close_reason"),

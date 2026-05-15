@@ -15,4 +15,5 @@ export interface BotAnalytics {
   bySymbol: AnalyticsDimEntry[];
   byDir: AnalyticsDimEntry[];
   byCloseReason: AnalyticsDimEntry[];
+  byMrxTf: AnalyticsDimEntry[];
 }

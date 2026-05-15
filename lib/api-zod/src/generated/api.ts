@@ -597,6 +597,19 @@ export const GetBotAnalyticsResponse = zod.object({
       worstPnl: zod.number().nullish(),
     }),
   ),
+  byMrxTf: zod.array(
+    zod.object({
+      label: zod.string(),
+      count: zod.number(),
+      wins: zod.number(),
+      losses: zod.number(),
+      winRate: zod.number().nullish(),
+      totalPnl: zod.number(),
+      avgPnl: zod.number().nullish(),
+      bestPnl: zod.number().nullish(),
+      worstPnl: zod.number().nullish(),
+    }),
+  ),
 });
 
 /**

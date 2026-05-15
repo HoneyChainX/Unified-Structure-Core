@@ -242,6 +242,7 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
     paperMode:      config.paperMode,
     // Micro mode tags trade as "micro_2usd"; CHT keeps "cht"; others keep signal strategy
     strategy:       isMicro ? "micro_2usd" : (signal.strategy ?? null),
+    timeframe:      signal.timeframe ?? null,
     // Micro mode: tp1/tp2 hold the two TP tiers; tp3 unused
     // CHT mode: tp1/tp2/tp3 hold 1R/1.5R/2R tiers
     tp1Price:       isMicro

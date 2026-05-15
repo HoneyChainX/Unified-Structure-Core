@@ -227,6 +227,52 @@ export function AnalyticsPage() {
 
       {/* Close reason */}
       <DimTable title="BREAKDOWN BY CLOSE REASON" data={data.byCloseReason} icon={BarChart2} />
+
+      {/* MRX per-timeframe */}
+      {data.byMrxTf.length > 0 && (
+        <div className="space-y-3">
+          <div className="border border-border bg-card">
+            <div className="px-4 py-3 border-b border-border bg-secondary/30 flex items-center gap-2">
+              <Hash className="w-3.5 h-3.5 text-primary" />
+              <span className="text-xs text-muted-foreground tracking-widest font-bold">MRX WIN RATE BY TIMEFRAME</span>
+              <span className="text-xs text-muted-foreground border border-border px-2 py-0.5 ml-auto">
+                {data.byMrxTf.reduce((s, r) => s + r.count, 0)} closed trades
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs font-mono">
+                <thead>
+                  <tr className="border-b border-border bg-secondary/50">
+                    {["TIMEFRAME", "TRADES", "WIN RATE", "TOTAL P&L", "AVG P&L", "BEST", "WORST"].map(h => (
+                      <th key={h} className="px-3 py-2.5 text-left text-muted-foreground tracking-wider font-normal whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.byMrxTf.map((row) => (
+                    <tr key={row.label} className="border-b border-border/40 hover:bg-secondary/30">
+                      <td className="px-3 py-2 font-bold text-foreground uppercase">{row.label}</td>
+                      <td className="px-3 py-2 text-muted-foreground">
+                        <span className="text-green-400">{row.wins}W</span>
+                        <span className="text-muted-foreground mx-1">/</span>
+                        <span className="text-red-400">{row.losses}L</span>
+                        <span className="text-muted-foreground ml-1">({row.count})</span>
+                      </td>
+                      <td className={`px-3 py-2 font-bold ${row.winRate != null ? row.winRate >= 0.5 ? "text-green-400" : "text-red-400" : "text-muted-foreground"}`}>
+                        {pct(row.winRate)}
+                      </td>
+                      <td className={`px-3 py-2 font-bold ${row.totalPnl >= 0 ? "text-green-400" : "text-red-400"}`}>{usd(row.totalPnl)}</td>
+                      <td className={`px-3 py-2 ${(row.avgPnl ?? 0) >= 0 ? "text-green-400" : "text-red-400"}`}>{usd(row.avgPnl)}</td>
+                      <td className="px-3 py-2 text-green-400">{usd(row.bestPnl)}</td>
+                      <td className="px-3 py-2 text-red-400">{usd(row.worstPnl)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
