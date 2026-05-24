@@ -11,6 +11,23 @@ A real-time trading signal dashboard for the "Unified v1" TradingView Pine Scrip
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - Required env: `DATABASE_URL` — Postgres connection string
+- After schema changes run `pnpm --filter @workspace/db run push` (dev) or apply `lib/db/migrations/003_fixes.sql` in production
+
+## Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | ✅ Yes | PostgreSQL connection string |
+| `PORT` | ✅ Yes | API server port (default 8080) |
+| `GATEIO_API_KEY` | Live trading | Gate.io API key |
+| `GATEIO_API_SECRET` | Live trading | Gate.io API secret |
+| `WEBHOOK_SECRET` | Recommended | Shared secret for TradingView webhook URL (`?secret=…`) |
+| `API_AUTH_TOKEN` | **Strongly recommended** | Bearer token required on all `/api/*` routes (except webhook + healthz). Without this, anyone with the server URL can modify bot config and trigger live trades. Generate with `openssl rand -hex 32`. |
+| `CORS_ORIGIN` | Production | Restrict CORS to your dashboard domain (e.g. `https://myapp.repl.co`). Defaults to `*`. |
+| `VITE_API_AUTH_TOKEN` | If `API_AUTH_TOKEN` set | Must match `API_AUTH_TOKEN`. Set in the dashboard build environment so all API calls attach the bearer token. |
+| `TELEGRAM_BOT_TOKEN` | Optional | Telegram bot token for trade open/close notifications |
+| `TELEGRAM_CHAT_ID` | Optional | Telegram chat ID for notifications |
+| `GATEIO_TAKER_FEE_RATE` | Optional | Override default 0.09% taker fee for fee-adjusted qty calculations |
 
 ## Webhook Integration
 
@@ -128,6 +145,19 @@ Third strategy mode (`strategy = "cht"`) implemented alongside BB+RSI and SMC MS
 
 - `artifacts/api-server/src/services/scalper-signals-cht.ts` — CHT Engine (full implementation)
 - `artifacts/api-server/src/services/scalper-signals.ts` — `ScalperSignal` interface now includes optional `chtScore`, `chtGrade`, `chtSetupType`, `chtTaoVotes` fields
+
+## ⚠️ Cross-System Exposure Warning (BUG-13)
+
+This project runs **two independent trading systems that share one Gate.io account**:
+
+- **System 1 (Webhook Bot):** reads `bot_config`, writes to `trades` table. Triggered by TradingView alerts.
+- **System 2 (Autonomous Scalper):** reads `scalper_config`, writes to `scalper_trades` table. Runs on its own schedule.
+
+**Neither system is aware of the other's open positions or balance usage.** The true maximum concurrent exposure is `bot_config.maxOpenTrades + scalper_config.maxOpenTrades` (e.g. 3 + 3 = 6 simultaneous positions). When both are enabled in live mode:
+
+- **Balance:** The scalper's % sizing (`positionSizePct`) and MRX 100%-balance mode consume USDT that the webhook bot assumes is available. Set conservative `positionSizeUsdt` values in both configs to account for this.
+- **Risk:** Do not enable both systems in live mode simultaneously until you have verified your total risk exposure is acceptable.
+- **Recommendation:** Use different `maxOpenTrades` caps so the combined total does not exceed your desired portfolio exposure.
 
 ## User preferences
 
