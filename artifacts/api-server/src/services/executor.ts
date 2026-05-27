@@ -14,6 +14,7 @@ import {
 import { getMarketStatus } from "./market";
 import { logger } from "../lib/logger";
 import { notifyTradeOpened } from "./notify";
+import { checkRiskGuard } from "./risk-guard";
 
 const GRADE_ORDER: Record<string, number> = {
   "None": 0,
@@ -175,6 +176,30 @@ export async function executeSignal(signal: Signal): Promise<void> {
 
   const gateSymbol = toGateSymbol(signal.symbol);
   const side = signal.dir === "LONG" ? "buy" : "sell";
+
+  // ── Global risk guard (BUG-13: combined exposure across both systems) ─────
+  if (!Number.isFinite(effectivePositionSize) || effectivePositionSize <= 0) {
+    logger.warn({ signalId: signal.id, effectivePositionSize }, "Bot: refusing — position size invalid");
+    return;
+  }
+  let equityForGuard: number | undefined;
+  try {
+    equityForGuard = await getUsdtBalance();
+  } catch {
+    equityForGuard = undefined;
+  }
+  const guard = await checkRiskGuard({
+    positionSizeUsdt: effectivePositionSize,
+    equityUsdt: equityForGuard,
+    source: "webhook-bot",
+  });
+  if (!guard.allowed) {
+    logger.warn(
+      { signalId: signal.id, reason: guard.reason, code: guard.reasonCode },
+      "Bot: refused by risk-guard",
+    );
+    return;
+  }
 
   const [trade] = await db.insert(tradesTable).values({
     signalId: signal.id,

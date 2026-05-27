@@ -23,6 +23,7 @@ import {
 } from "./gateio";
 import type { ScalperSignal } from "./scalper-signals";
 import { logger } from "../lib/logger";
+import { checkRiskGuard } from "./risk-guard";
 
 export interface ExecuteOptions {
   /** When true: skip cooldown and duplicate guards (used for manual entries) */
@@ -184,7 +185,32 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       "Micro mode: position sized",
     );
   } else {
+    if (!Number.isFinite(entryPrice) || entryPrice <= 0) {
+      logger.warn({ symbol: signal.gateSymbol, entryPrice }, "Scalper: refusing trade — entryPrice invalid");
+      return `Invalid entry price (${entryPrice}) for ${signal.gateSymbol}`;
+    }
     quantity = positionSize / entryPrice;
+  }
+
+  // ── Global risk guard (BUG-13: combined exposure across both systems) ─────
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    logger.warn({ symbol: signal.gateSymbol, quantity, positionSize, entryPrice }, "Scalper: refusing trade — quantity invalid");
+    return `Computed quantity invalid (${quantity}) — refusing trade`;
+  }
+  let equityForGuard: number | undefined;
+  try {
+    equityForGuard = await getUsdtBalance();
+  } catch {
+    equityForGuard = undefined;
+  }
+  const guard = await checkRiskGuard({
+    positionSizeUsdt: positionSize,
+    equityUsdt: equityForGuard,
+    source: "scalper",
+  });
+  if (!guard.allowed) {
+    logger.warn({ symbol: signal.gateSymbol, reason: guard.reason, code: guard.reasonCode }, "Scalper: refused by risk-guard");
+    return guard.reason ?? "Refused by risk guard";
   }
 
   /** Compute TP/SL from a given fill price, honouring signal geometry first, then config. */

@@ -1,8 +1,9 @@
 import { db, tradesTable, botConfigTable } from "@workspace/db";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { getLivePrice, getSpotOrder, getPriceTriggeredOrder } from "./gateio";
 import { logger } from "../lib/logger";
 import { notifyTradeClosed } from "./notify";
+import { pnlFromFills } from "./fees";
 
 export let lastSyncAt: Date | null = null;
 
@@ -11,16 +12,23 @@ export let lastSyncAt: Date | null = null;
  * compoundBalance = max(current + pnl, 10% of original positionSizeUsdt)
  */
 async function updateCompoundBalance(pnl: number | null): Promise<void> {
-  if (pnl == null) return;
+  if (pnl == null || !Number.isFinite(pnl)) return;
   try {
     const [config] = await db.select().from(botConfigTable).limit(1);
     if (!config || !config.compoundingEnabled || config.compoundBalance == null) return;
 
-    const newBalance = Math.max(config.compoundBalance + pnl, config.positionSizeUsdt * 0.1);
-    await db.update(botConfigTable)
-      .set({ compoundBalance: parseFloat(newBalance.toFixed(4)), updatedAt: new Date() })
-      .where(eq(botConfigTable.id, config.id));
-
+    // Atomic increment: avoids read-modify-write race when two closes land
+    // in the same tick. Floor at 10 % of original sizing so a drawdown
+    // streak can't drive the compound balance to zero.
+    const floor = config.positionSizeUsdt * 0.1;
+    const result = await db.execute(sql`
+      UPDATE ${botConfigTable}
+      SET compound_balance = GREATEST(coalesce(compound_balance, 0) + ${pnl}, ${floor}),
+          updated_at = now()
+      WHERE id = ${config.id}
+      RETURNING compound_balance
+    `);
+    const newBalance = (result.rows?.[0] as { compound_balance?: number } | undefined)?.compound_balance;
     logger.info(
       { oldBalance: config.compoundBalance, pnl, newBalance },
       "Compound balance updated after trade close"
@@ -61,19 +69,21 @@ async function syncOpenTrade(trade: typeof tradesTable.$inferSelect): Promise<vo
       }
 
       if (closeReason) {
-        const closedPnl =
+        const fillMath =
           entryPrice != null && quantity != null
-            ? (side === "buy" ? livePrice - entryPrice : entryPrice - livePrice) * quantity
+            ? pnlFromFills({ side: side as "buy" | "sell", entryPrice, closePrice: livePrice, quantity })
             : null;
+        const closedPnl = fillMath ? fillMath.net : null;
         await db.update(tradesTable).set({
           status: "closed",
           livePrice,
           closePrice: livePrice,
           closeReason,
           pnl: closedPnl,
+          feesUsdt: fillMath?.fees ?? null,
           closedAt: new Date(),
         }).where(eq(tradesTable.id, id));
-        logger.info({ tradeId: id, closeReason, livePrice, pnl: closedPnl }, "Paper trade auto-closed");
+        logger.info({ tradeId: id, closeReason, livePrice, pnl: closedPnl, fees: fillMath?.fees }, "Paper trade auto-closed (fee-adjusted)");
         notifyTradeClosed({
           symbol: trade.symbol,
           side: trade.side as "buy" | "sell",
@@ -112,16 +122,18 @@ async function syncOpenTrade(trade: typeof tradesTable.$inferSelect): Promise<vo
       if (order.status === "finish") {
         const closePrice = parseFloat(order.put.avg_deal_price || order.put.price);
         const closedQty = parseFloat(order.put.amount) - parseFloat(order.put.left || "0");
-        const pnl =
+        const fillMath =
           entryPrice != null && closedQty > 0
-            ? (side === "buy" ? closePrice - entryPrice : entryPrice - closePrice) * closedQty
+            ? pnlFromFills({ side: side as "buy" | "sell", entryPrice, closePrice, quantity: closedQty })
             : null;
+        const pnl = fillMath ? fillMath.net : null;
 
         await db.update(tradesTable).set({
           status: "closed",
           closePrice,
           closeReason: reason,
           pnl,
+          feesUsdt: fillMath?.fees ?? null,
           closedAt: new Date(),
         }).where(eq(tradesTable.id, id));
 

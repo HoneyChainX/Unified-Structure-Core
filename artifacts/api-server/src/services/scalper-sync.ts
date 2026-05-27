@@ -12,7 +12,7 @@
  */
 
 import { db, scalperConfigTable, scalperTradesTable } from "@workspace/db";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import {
   getLivePrice,
   getPriceTriggeredOrder,
@@ -83,6 +83,7 @@ export let scalperLastSyncAt: Date | null = null;
 // ── Compound balance update ───────────────────────────────────────────────────
 
 async function updateScalperCompoundBalance(pnl: number): Promise<void> {
+  if (!Number.isFinite(pnl)) return;
   try {
     const [config] = await db.select().from(scalperConfigTable).limit(1);
     if (!config || !config.compoundingEnabled || config.compoundBalance == null) return;
@@ -95,11 +96,16 @@ async function updateScalperCompoundBalance(pnl: number): Promise<void> {
       return;
     }
 
-    const newBalance = Math.max(config.compoundBalance + pnl, config.positionSizeUsdt * 0.1);
-    await db.update(scalperConfigTable)
-      .set({ compoundBalance: parseFloat(newBalance.toFixed(4)), updatedAt: new Date() })
-      .where(eq(scalperConfigTable.id, config.id));
-
+    // Atomic SQL update so concurrent closes can't lose increments.
+    const floor = config.positionSizeUsdt * 0.1;
+    const result = await db.execute(sql`
+      UPDATE ${scalperConfigTable}
+      SET compound_balance = GREATEST(coalesce(compound_balance, 0) + ${pnl}, ${floor}),
+          updated_at = now()
+      WHERE id = ${config.id}
+      RETURNING compound_balance
+    `);
+    const newBalance = (result.rows?.[0] as { compound_balance?: number } | undefined)?.compound_balance;
     logger.info({ oldBalance: config.compoundBalance, pnl, newBalance }, "Scalper: compound balance updated");
   } catch (err) {
     logger.warn({ err }, "Scalper: failed to update compound balance");

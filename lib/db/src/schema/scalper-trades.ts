@@ -50,6 +50,9 @@ export const scalperTradesTable = pgTable("scalper_trades", {
   realizedPnl:  numeric("realized_pnl"), // USDT profit locked in by partial exits (string in TS — use Number())
 
   pnl: real("pnl"),
+  feesUsdt: real("fees_usdt"),
+  slippageBps: real("slippage_bps"),
+  protectionState: text("protection_state").notNull().default("pending"),
   errorMessage: text("error_message"),
   paperMode: boolean("paper_mode").notNull().default(true),
 

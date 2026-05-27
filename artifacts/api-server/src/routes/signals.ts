@@ -10,16 +10,29 @@ import {
 
 const router = Router();
 
-// Optional webhook secret — set WEBHOOK_SECRET env var to enable
-// TradingView: append ?secret=YOUR_SECRET to the webhook URL
+// Webhook secret — required unless NODE_ENV=development.
+// Send via X-Webhook-Secret header (or ?secret=… query string for legacy TradingView setups).
 router.post("/webhook", async (req, res): Promise<void> => {
   const webhookSecret = process.env.WEBHOOK_SECRET;
-  if (webhookSecret) {
-    const provided = (req.query.secret as string | undefined) ?? req.headers["x-webhook-secret"];
+  const isDev = process.env.NODE_ENV === "development";
+
+  if (!webhookSecret) {
+    if (!isDev) {
+      req.log.error("Webhook: WEBHOOK_SECRET is not set — refusing all signals");
+      res.status(500).json({ error: "Server misconfigured: WEBHOOK_SECRET not set" });
+      return;
+    }
+  } else {
+    const headerVal = req.headers["x-webhook-secret"];
+    const headerStr = Array.isArray(headerVal) ? headerVal[0] : headerVal;
+    const provided = headerStr ?? (req.query.secret as string | undefined);
     if (!provided || provided !== webhookSecret) {
       req.log.warn({ ip: req.ip }, "Webhook: rejected — invalid or missing secret");
       res.status(401).json({ error: "Unauthorized" });
       return;
+    }
+    if (req.query.secret) {
+      req.log.warn({ ip: req.ip }, "Webhook: secret in query string — please migrate to X-Webhook-Secret header (query strings can be logged by proxies)");
     }
   }
 
