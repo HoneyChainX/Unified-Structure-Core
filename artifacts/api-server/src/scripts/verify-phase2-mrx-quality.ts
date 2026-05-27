@@ -92,3 +92,5 @@ ok(marginal > 0, "marginal setup scores > 0 (not zero — it did pass)");
 
 console.log(`\n${fails === 0 ? "✓ ALL PASS" : `✗ ${fails} FAILURE(S)`}`);
 process.exit(fails === 0 ? 0 : 1);
+
+export {};

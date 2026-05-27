@@ -80,3 +80,5 @@ ok(sizeWithQuality(100, 0.0, { ...enabled, qualityAwareSizingMicroMode: true }, 
 
 console.log(`\n${fails === 0 ? "✓ ALL PASS" : `✗ ${fails} FAILURE(S)`}`);
 process.exit(fails === 0 ? 0 : 1);
+
+export {};
