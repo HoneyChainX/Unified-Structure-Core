@@ -5,6 +5,7 @@ import botRouter from "./bot";
 import marketRouter from "./market";
 import scalperRouter from "./scalper";
 import devRouter from "./dev";
+import riskRouter from "./risk";
 
 const router: IRouter = Router();
 
@@ -14,5 +15,6 @@ router.use("/bot", botRouter);
 router.use("/market", marketRouter);
 router.use("/scalper", scalperRouter);
 router.use("/dev", devRouter);
+router.use("/risk", riskRouter);
 
 export default router;

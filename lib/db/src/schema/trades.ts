@@ -32,6 +32,9 @@ export const tradesTable = pgTable("trades", {
   closeReason: text("close_reason"),
 
   pnl: real("pnl"),
+  feesUsdt: real("fees_usdt"),
+  slippageBps: real("slippage_bps"),
+  protectionState: text("protection_state").notNull().default("pending"),
   errorMessage: text("error_message"),
   paperMode: boolean("paper_mode").notNull().default(true),
 
