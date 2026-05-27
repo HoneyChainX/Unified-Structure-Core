@@ -525,6 +525,9 @@ export function evaluateCHTSignal(
     chtGrade:     grade,
     chtSetupType: trigger.type,
     chtTaoVotes:  taoVotes,
+    // Map the 0..100 opportunity score onto the shared [0,1] quality channel.
+    // MEDIUM grade starts at 60 (quality 0.60), STRONG at 75, ELITE at 85.
+    quality:      Math.min(1, Math.max(0, score / 100)),
   };
 }
 

@@ -331,6 +331,8 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
                       ? parseFloat((microTp2 ?? 0).toFixed(8))
                       : isCht ? parseFloat(signal.tp2Price!.toFixed(8)) : undefined,
     tp3Price:       isCht ? parseFloat(signal.tp3Price!.toFixed(8)) : undefined,
+    // Shared 0..1 quality score; null when the signal engine didn't populate it.
+    quality:        signal.quality != null ? signal.quality.toFixed(6) : null,
   };
 
   const [trade] = await db.insert(scalperTradesTable).values({
