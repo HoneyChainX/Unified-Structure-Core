@@ -18,12 +18,65 @@ import {
   getLivePrice,
   placeSpotOrder,
   placePriceTriggeredOrder,
+  cancelPriceTriggeredOrder,
   fmtForPair,
   getMinBaseAmount,
 } from "./gateio";
 import type { ScalperSignal } from "./scalper-signals";
 import { logger } from "../lib/logger";
 import { checkRiskGuard } from "./risk-guard";
+import { pnlFromFills } from "./fees";
+
+/**
+ * Emergency-close a position that was opened but failed to receive its SL.
+ *
+ * Returns the realised net P&L (or null if the market-close itself failed).
+ * Caller must update `protection_state` and `status` on the trade row.
+ */
+async function emergencyCloseScalperPosition(args: {
+  tradeId: number;
+  gateSymbol: string;
+  side: "buy" | "sell";
+  qty: number;
+  entryPrice: number;
+}): Promise<{ closePrice: number; net: number; fees: number } | null> {
+  const exitSide = args.side === "buy" ? "sell" : "buy";
+  // Gate.io market SELL on spot expects base-currency amount; market BUY expects USDT.
+  // Our exit is the opposite of `side`, so:
+  //   side="buy"  → exitSide="sell" → amount = base qty
+  //   side="sell" → exitSide="buy"  → amount = base qty * price (USDT notional)
+  try {
+    const livePrice = await getLivePrice(args.gateSymbol);
+    const amount =
+      exitSide === "sell"
+        ? args.qty.toFixed(8)
+        : (args.qty * livePrice).toFixed(4);
+    const closeOrder = await placeSpotOrder({
+      currencyPair: args.gateSymbol,
+      side: exitSide,
+      amount,
+      type: "market",
+    });
+    const closePrice = parseFloat(closeOrder.avg_deal_price || closeOrder.price || livePrice.toString());
+    const fillMath = pnlFromFills({
+      side: args.side,
+      entryPrice: args.entryPrice,
+      closePrice,
+      quantity: args.qty,
+    });
+    logger.warn(
+      { tradeId: args.tradeId, closePrice, net: fillMath.net, fees: fillMath.fees },
+      "Scalper: EMERGENCY CLOSE executed — SL placement failed, position market-closed",
+    );
+    return { closePrice, net: fillMath.net, fees: fillMath.fees };
+  } catch (err) {
+    logger.error(
+      { tradeId: args.tradeId, err: err instanceof Error ? err.message : String(err) },
+      "Scalper: emergency close FAILED — position may be NAKED on exchange, manual intervention required",
+    );
+    return null;
+  }
+}
 
 export interface ExecuteOptions {
   /** When true: skip cooldown and duplicate guards (used for manual entries) */
@@ -797,10 +850,55 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       orderUpdates.errorMessage = orderErrors.join(" | ");
     }
 
+    // ── Atomic SL/TP placement: SL is mandatory; TP is best-effort ──────────
+    const slMissing = !orderUpdates.slOrderId;
+    const anyTpMissing = isCht
+      ? !(orderUpdates.tp1OrderId && orderUpdates.tp2OrderId && orderUpdates.tp3OrderId)
+      : isMicro
+        ? !(orderUpdates.tp1OrderId && orderUpdates.tp2OrderId)
+        : !orderUpdates.tpOrderId;
+
+    let protectionState: "protected" | "degraded" | "emergency_closed" = "protected";
+    if (slMissing) {
+      protectionState = "emergency_closed";
+      const close = await emergencyCloseScalperPosition({
+        tradeId: trade.id,
+        gateSymbol: signal.gateSymbol,
+        side: signal.side as "buy" | "sell",
+        qty: slTpQty,
+        entryPrice: filledPrice,
+      });
+      // Cancel any TPs we managed to place — they would otherwise sit live with no position.
+      for (const key of ["tp1OrderId", "tp2OrderId", "tp3OrderId", "tpOrderId"] as const) {
+        const oid = orderUpdates[key];
+        if (oid) {
+          try { await cancelPriceTriggeredOrder(oid, signal.gateSymbol); } catch (err) {
+            logger.warn({ tradeId: trade.id, key, oid, err }, "Scalper: failed to cancel orphan TP after emergency close");
+          }
+        }
+      }
+      Object.assign(orderUpdates, {
+        status: "closed",
+        closePrice: close?.closePrice,
+        closeReason: "emergency_no_sl",
+        pnl: close?.net,
+        feesUsdt: close?.fees,
+        closedAt: new Date(),
+        // Wipe TP order IDs since we cancelled them
+        tp1OrderId: null, tp2OrderId: null, tp3OrderId: null, tpOrderId: null,
+      } as Record<string, unknown>);
+    } else if (anyTpMissing) {
+      protectionState = "degraded";
+    }
+    (orderUpdates as Record<string, unknown>).protectionState = protectionState;
+
     if (Object.keys(orderUpdates).length > 0) {
-      await db.update(scalperTradesTable).set(orderUpdates).where(eq(scalperTradesTable.id, trade.id));
+      await db.update(scalperTradesTable).set(orderUpdates as Partial<typeof scalperTradesTable.$inferInsert>).where(eq(scalperTradesTable.id, trade.id));
     }
 
+    if (slMissing) {
+      return "Emergency close: SL placement failed, position market-closed";
+    }
     return null;
 
   } catch (err) {
