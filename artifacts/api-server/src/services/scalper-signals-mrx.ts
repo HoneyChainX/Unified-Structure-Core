@@ -417,7 +417,29 @@ export function evaluateMRXSignal(
     };
   }
 
-  // ── All gates passed ──────────────────────────────────────────────────────
+  // ── All gates passed — compute setup quality on the shared [0,1] channel ──
+  //
+  // MRX is a hard-gated engine: any of 7 gates rejects. Once the setup passes,
+  // we score *how good* it is along the same axes the gates measure, so the
+  // executor can rank multiple MRX candidates from one scan cycle.
+  //
+  //   RSI extremity   30%  — deeper oversold = stronger mean-reversion
+  //   BB extension    20%  — close below band = price stretched beyond 2σ
+  //   Volume          20%  — conviction above the 1.2 hard floor
+  //   HTF stack       15%  — 15m EMA20 > EMA50 (bullish backdrop)
+  //   No-pump score   15%  — quiet base (no -1.5%..+1.5% chop) preferred
+  //   OB confluence   +10% bonus on top, clamped to 1.0
+  const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
+  const rsiScore  = clamp01((effectiveRsiCap - rsi) / Math.max(1, effectiveRsiCap));
+  const bbScore   = clamp01(((bb.lower - lastClose) / Math.max(1e-12, bb.lower)) * 100);
+  const volScore  = clamp01((volumeRatio - 1.2) / 1.8);
+  const htfScore  = htfEma20 > htfEma50 ? 1 : 0.5;
+  const pumpScore = clamp01((pumpChange5m + 1.5) / 3);
+  let quality = 0.30 * rsiScore + 0.20 * bbScore + 0.20 * volScore +
+                0.15 * htfScore + 0.15 * pumpScore;
+  if (inOB) quality += 0.10;
+  quality = clamp01(quality);
+
   return {
     signal: {
       symbol,
@@ -433,6 +455,7 @@ export function evaluateMRXSignal(
       slPrice,
       strategy:  MRX_STRATEGY_TAG,
       timeframe,
+      quality,
     },
     decision: {
       ...base, accepted: true,
