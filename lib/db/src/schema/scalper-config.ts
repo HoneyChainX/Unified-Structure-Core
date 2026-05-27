@@ -81,6 +81,17 @@ export const scalperConfigTable = pgTable("scalper_config", {
   mrxBbWidthMin3m: real("mrx_bb_width_min_3m").notNull().default(0.6),
   mrxBbWidthMax3m: real("mrx_bb_width_max_3m").notNull().default(5.0),
 
+  // Adaptive RSI thresholds (BB+RSI engine). When enabled, rsiOversold /
+  // rsiOverbought are replaced with rolling quantiles of the symbol's own
+  // RSI distribution over `adaptiveWindow` bars. The floors clamp the
+  // adaptive bounds so quiet markets don't fire at RSI 45/55.
+  adaptiveThresholds:    boolean("adaptive_thresholds").notNull().default(false),
+  adaptiveWindow:        integer("adaptive_window").notNull().default(100),
+  adaptiveLowQ:          real("adaptive_low_q").notNull().default(0.05),
+  adaptiveHighQ:         real("adaptive_high_q").notNull().default(0.95),
+  adaptiveRsiLowFloor:   real("adaptive_rsi_low_floor").notNull().default(35),
+  adaptiveRsiHighFloor:  real("adaptive_rsi_high_floor").notNull().default(65),
+
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

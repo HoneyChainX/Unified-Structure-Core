@@ -53,6 +53,13 @@ export interface ScalperSignal {
   chtSetupType?: string;
   chtTaoVotes?: number;
   chtRr?: number;
+  /**
+   * Setup quality in [0, 1] — higher = more extreme relative to the symbol's
+   * own recent distribution. Populated by the adaptive-threshold path
+   * (BB+RSI) and intended as the common scoring channel for future ranking
+   * across engines.
+   */
+  quality?: number;
 }
 
 // ── Public helpers ──────────────────────────────────────────────────────────
@@ -152,6 +159,51 @@ export function computeRSI(closes: number[], period: number): number {
   return 100 - 100 / (1 + rs);
 }
 
+/**
+ * Rolling RSI series: returns one RSI value per anchor bar over `window` bars
+ * ending at the last candle. Used by the adaptive-threshold path to compute
+ * per-symbol RSI quantiles instead of relying on global 30/70 cutoffs.
+ *
+ * For a closes-array of length N and period P, anchor bar i ∈ [P, N) produces
+ * an RSI computed from closes[i-P..i]. Result length = min(window, N-P).
+ */
+export function computeRSISeries(closes: number[], period: number, window: number): number[] {
+  const out: number[] = [];
+  if (closes.length < period + 1) return out;
+  const startAnchor = Math.max(period, closes.length - window);
+  for (let anchor = startAnchor; anchor < closes.length; anchor++) {
+    let gains = 0;
+    let losses = 0;
+    for (let i = anchor - period + 1; i <= anchor; i++) {
+      const diff = closes[i] - closes[i - 1];
+      if (diff >= 0) gains += diff;
+      else losses -= diff;
+    }
+    const avgGain = gains / period;
+    const avgLoss = losses / period;
+    if (avgLoss === 0) { out.push(100); continue; }
+    const rs = avgGain / avgLoss;
+    out.push(100 - 100 / (1 + rs));
+  }
+  return out;
+}
+
+/**
+ * Linear-interpolated quantile on a numeric array. Empty input → fallback.
+ * Used by adaptive RSI thresholds and the signal-quality score.
+ */
+export function quantile(values: number[], q: number, fallback = NaN): number {
+  if (values.length === 0) return fallback;
+  if (q <= 0) return Math.min(...values);
+  if (q >= 1) return Math.max(...values);
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = q * (sorted.length - 1);
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+}
+
 export function computeVolumeRatio(volumes: number[], avgPeriod = 20): number {
   if (volumes.length < 2) return 1;
   const avgVol = sma(volumes.slice(0, -1), Math.min(avgPeriod, volumes.length - 1));
@@ -187,6 +239,18 @@ export interface SignalParams {
   symbols?: string[];
   /** Timeframe for candle fetching (default "5m") */
   timeframe?: string;
+  /**
+   * Adaptive RSI thresholds. When true, rsiOversold/rsiOverbought are
+   * ignored and replaced by the rolling Nth-percentile of the symbol's
+   * recent RSI distribution. Floors clamp the adaptive bounds so quiet
+   * markets don't fire signals at RSI 45/55.
+   */
+  adaptiveThresholds?: boolean;
+  adaptiveWindow?: number;       // bars of history (default 100)
+  adaptiveLowQ?: number;         // 0..1 (default 0.05)
+  adaptiveHighQ?: number;        // 0..1 (default 0.95)
+  adaptiveRsiLowFloor?: number;  // clamp upper bound of the adaptive oversold (default 35)
+  adaptiveRsiHighFloor?: number; // clamp lower bound of the adaptive overbought (default 65)
 }
 
 export function evaluateSignal(
@@ -208,6 +272,39 @@ export function evaluateSignal(
   const volumeRatio = computeVolumeRatio(volumes);
   const ema = params.emaFilterEnabled ? computeEMA(closes, params.emaPeriod) : null;
 
+  // ── Adaptive RSI thresholds ───────────────────────────────────────────────
+  // When enabled, the oversold / overbought cutoffs are the rolling lowQ /
+  // highQ percentiles of this symbol's RSI distribution over the last
+  // `adaptiveWindow` bars. Quiet markets get tighter bounds; volatile markets
+  // get wider bounds. Floors prevent the bounds from becoming so loose that
+  // the strategy fires at neutral RSI in flat regimes.
+  let rsiOversold = params.rsiOversold;
+  let rsiOverbought = params.rsiOverbought;
+  let qualityLong: number | undefined;
+  let qualityShort: number | undefined;
+  if (params.adaptiveThresholds) {
+    const win = Math.max(20, params.adaptiveWindow ?? 100);
+    const lowQ = params.adaptiveLowQ ?? 0.05;
+    const highQ = params.adaptiveHighQ ?? 0.95;
+    const lowFloor = params.adaptiveRsiLowFloor ?? 35;
+    const highFloor = params.adaptiveRsiHighFloor ?? 65;
+    const series = computeRSISeries(closes, params.rsiPeriod, win);
+    if (series.length >= 20) {
+      const aLow = quantile(series, lowQ, params.rsiOversold);
+      const aHigh = quantile(series, highQ, params.rsiOverbought);
+      // Clamp toward the configured floors so adaptive can never *loosen*
+      // beyond a sane threshold (avoids firing at RSI 45 in a flat market).
+      rsiOversold = Math.min(aLow, lowFloor);
+      rsiOverbought = Math.max(aHigh, highFloor);
+      // Quality = how far below/above the bound the current RSI sits, on a
+      // 0..1 scale where 1 = at-or-beyond the historical min/max.
+      const sMin = Math.min(...series);
+      const sMax = Math.max(...series);
+      qualityLong  = rsi <= rsiOversold ? Math.min(1, (rsiOversold - rsi) / Math.max(1, rsiOversold - sMin)) : 0;
+      qualityShort = rsi >= rsiOverbought ? Math.min(1, (rsi - rsiOverbought) / Math.max(1, sMax - rsiOverbought)) : 0;
+    }
+  }
+
   // Volume is a confirmation metric displayed on the signal, but NOT a hard gate.
   // BB+RSI fires on price extremity + RSI confirmation alone — volume amplifies
   // signal quality but should never silence a genuine oversold/overbought setup,
@@ -221,7 +318,7 @@ export function evaluateSignal(
   // dip below EMA50. Requiring price > EMA blocks every valid setup. Instead, block
   // only when price is MORE THAN 2% below EMA (genuine downtrend), not a normal dip.
   const trendAllowsLong = !params.emaFilterEnabled || ema === null || lastClose > ema * 0.98;
-  if (lastClose <= bb.lower && rsi <= params.rsiOversold && trendAllowsLong) {
+  if (lastClose <= bb.lower && rsi <= rsiOversold && trendAllowsLong) {
     return {
       symbol,
       gateSymbol,
@@ -232,12 +329,13 @@ export function evaluateSignal(
       bbMid: bb.mid,
       rsi,
       volumeRatio,
+      quality: qualityLong,
     };
   }
 
   // SHORT: price at/above upper BB AND RSI overbought — volume is informational only
   const trendAllowsShort = !params.emaFilterEnabled || ema === null || lastClose < ema;
-  if (!params.longOnly && lastClose >= bb.upper && rsi >= params.rsiOverbought && trendAllowsShort) {
+  if (!params.longOnly && lastClose >= bb.upper && rsi >= rsiOverbought && trendAllowsShort) {
     return {
       symbol,
       gateSymbol,
@@ -248,6 +346,7 @@ export function evaluateSignal(
       bbMid: bb.mid,
       rsi,
       volumeRatio,
+      quality: qualityShort,
     };
   }
 

@@ -414,6 +414,12 @@ export async function runScalperScan(): Promise<void> {
         emaPeriod: config.emaPeriod,
         symbols: resolvedSymbols ?? undefined,
         timeframe: tf,
+        adaptiveThresholds:   config.adaptiveThresholds,
+        adaptiveWindow:       config.adaptiveWindow,
+        adaptiveLowQ:         config.adaptiveLowQ,
+        adaptiveHighQ:        config.adaptiveHighQ,
+        adaptiveRsiLowFloor:  config.adaptiveRsiLowFloor,
+        adaptiveRsiHighFloor: config.adaptiveRsiHighFloor,
       });
     }
 
