@@ -21,7 +21,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 9
 
       - name: Install Node
         uses: actions/setup-node@v4
@@ -30,7 +30,7 @@ jobs:
           cache: pnpm
 
       - name: Install deps
-        run: pnpm install --frozen-lockfile --strict-peer-dependencies=false
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck
         run: pnpm run typecheck
@@ -63,7 +63,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 9
 
       - name: Install Node
         uses: actions/setup-node@v4
@@ -72,7 +72,7 @@ jobs:
           cache: pnpm
 
       - name: Install deps
-        run: pnpm install --frozen-lockfile --strict-peer-dependencies=false
+        run: pnpm install --frozen-lockfile
 
       - name: Apply drizzle schema
         run: pnpm --filter @workspace/db run push
