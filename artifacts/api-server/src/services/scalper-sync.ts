@@ -441,24 +441,40 @@ async function syncChtLiveTrade(trade: typeof scalperTradesTable.$inferSelect): 
       const tp3PnlIncrement = (result.price - (entryPrice ?? 0)) * dir * tp3FillQty;
       const newRealizedPnl  = Number(trade.realizedPnl ?? 0) + tp3PnlIncrement;
 
-      // A1: force-close any rounding residual (> 0.00001 base units)
+      // A1: force-close any rounding residual.  Below the 0.00001 base-unit
+      // threshold (or on close failure) we mark-to-market the dust at the
+      // last-known live price and fold it into realizedPnl so the compound
+      // balance never silently drifts.
       let residualPnl = 0;
       const residualQty = qty - closedSoFar - tp3FillQty;
-      if (residualQty > 0.00001) {
-        try {
-          const lp = await getLivePrice(gateSymbol);
-          const resiFmt  = await fmtForPair(gateSymbol, lp, residualQty);
-          const exitOrder = await placeSpotOrder({
-            currencyPair: gateSymbol,
-            side:         side === "buy" ? "sell" : "buy",
-            amount:       resiFmt.amount,
-            type:         "market",
-          });
-          const resiClose = parseFloat(exitOrder.avg_deal_price || lp.toString());
-          residualPnl = (resiClose - (entryPrice ?? 0)) * dir * residualQty;
-          logger.info({ tradeId: id, residualQty, resiClose, residualPnl }, "CHT live: TP3 residual force-closed");
-        } catch (resiErr) {
-          logger.warn({ tradeId: id, residualQty, resiErr }, "CHT live: TP3 residual force-close failed (dust — ignoring)");
+      if (residualQty > 0) {
+        let resiClose: number | null = null;
+        if (residualQty > 0.00001) {
+          try {
+            const lp = await getLivePrice(gateSymbol);
+            const resiFmt  = await fmtForPair(gateSymbol, lp, residualQty);
+            const exitOrder = await placeSpotOrder({
+              currencyPair: gateSymbol,
+              side:         side === "buy" ? "sell" : "buy",
+              amount:       resiFmt.amount,
+              type:         "market",
+            });
+            resiClose = parseFloat(exitOrder.avg_deal_price || lp.toString());
+            residualPnl = (resiClose - (entryPrice ?? 0)) * dir * residualQty;
+            logger.info({ tradeId: id, residualQty, resiClose, residualPnl }, "CHT live: TP3 residual force-closed");
+          } catch (resiErr) {
+            logger.warn({ tradeId: id, residualQty, resiErr }, "CHT live: TP3 residual force-close failed — falling back to mark-to-market");
+          }
+        }
+        if (resiClose == null) {
+          // Dust path: account for it at last-known mark.
+          try {
+            const mark = await getLivePrice(gateSymbol);
+            residualPnl = (mark - (entryPrice ?? 0)) * dir * residualQty;
+            logger.info({ tradeId: id, residualQty, mark, residualPnl }, "CHT live: TP3 residual marked-to-market (dust accounted)");
+          } catch (mtmErr) {
+            logger.warn({ tradeId: id, residualQty, mtmErr }, "CHT live: dust mark-to-market failed — entering 0 PnL for residual");
+          }
         }
       }
 

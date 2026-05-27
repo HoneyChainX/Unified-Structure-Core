@@ -8,9 +8,11 @@ import {
   getLivePrice,
   placeSpotOrder,
   placePriceTriggeredOrder,
+  cancelPriceTriggeredOrder,
   fmtForPair,
   toGateSymbol,
 } from "./gateio";
+import { pnlFromFills } from "./fees";
 import { getMarketStatus } from "./market";
 import { logger } from "../lib/logger";
 import { notifyTradeOpened } from "./notify";
@@ -423,7 +425,58 @@ export async function executeSignal(signal: Signal): Promise<void> {
       }
     }
 
-    await db.update(tradesTable).set(tpOrders).where(eq(tradesTable.id, trade.id));
+    // ── Atomic SL/TP placement: SL is mandatory; TP is best-effort ──────────
+    const slRequired = config.slEnabled && signal.sl != null;
+    const slMissing = slRequired && !tpOrders.slOrderId;
+    let protectionState: "protected" | "degraded" | "emergency_closed" = "protected";
+    const finalUpdates: Record<string, unknown> = { ...tpOrders };
+
+    if (slMissing) {
+      protectionState = "emergency_closed";
+      const exitSide = side === "buy" ? "sell" : "buy";
+      try {
+        const exitAmount =
+          exitSide === "sell"
+            ? quantity.toFixed(8)
+            : (quantity * entryPrice).toFixed(4);
+        const closeOrder = await placeSpotOrder({
+          currencyPair: gateSymbol,
+          side: exitSide,
+          amount: exitAmount,
+          type: "market",
+        });
+        const closePrice = parseFloat(closeOrder.avg_deal_price || closeOrder.price || entryPrice.toString());
+        const fillMath = pnlFromFills({ side, entryPrice, closePrice, quantity });
+        Object.assign(finalUpdates, {
+          status: "closed",
+          closePrice,
+          closeReason: "emergency_no_sl",
+          pnl: fillMath.net,
+          feesUsdt: fillMath.fees,
+          closedAt: new Date(),
+          tp1OrderId: null, tp2OrderId: null, tp3OrderId: null,
+        });
+        logger.warn({ tradeId: trade.id, closePrice, net: fillMath.net }, "Bot: EMERGENCY CLOSE executed — SL placement failed");
+        for (const key of ["tp1OrderId", "tp2OrderId", "tp3OrderId"] as const) {
+          const oid = tpOrders[key];
+          if (oid) {
+            try { await cancelPriceTriggeredOrder(oid, gateSymbol); } catch (err) {
+              logger.warn({ tradeId: trade.id, key, oid, err }, "Bot: failed to cancel orphan TP after emergency close");
+            }
+          }
+        }
+      } catch (err) {
+        logger.error({ tradeId: trade.id, err: err instanceof Error ? err.message : String(err) }, "Bot: emergency close FAILED — position may be NAKED on exchange");
+        Object.assign(finalUpdates, { errorMessage: "Emergency close failed — manual intervention required" });
+      }
+    } else if ((config.tp1Enabled && signal.tp1 && !tpOrders.tp1OrderId)
+      || (config.tp2Enabled && signal.tp2 && !tpOrders.tp2OrderId)
+      || (config.tp3Enabled && signal.tp3 && !tpOrders.tp3OrderId)) {
+      protectionState = "degraded";
+    }
+    finalUpdates.protectionState = protectionState;
+
+    await db.update(tradesTable).set(finalUpdates as Partial<typeof tradesTable.$inferInsert>).where(eq(tradesTable.id, trade.id));
 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
