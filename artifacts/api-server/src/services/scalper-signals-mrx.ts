@@ -39,6 +39,7 @@ import {
   getTopUsdtSymbols,
 } from "./scalper-signals";
 import { computeATR } from "./scalper-signals-cht";
+import { getPerpFundingRate } from "./gateio";
 import { logger } from "../lib/logger";
 
 // ── Fixed MRX parameters ──────────────────────────────────────────────────────
@@ -281,6 +282,11 @@ export function evaluateMRXSignal(
   candles1h: Candle[],
   timeframe: "1m" | "3m" = "3m",
   thresholds: MRXThresholds = MRX_DEFAULT_THRESHOLDS,
+  fundingContext?: {
+    rate: number | null;
+    thresholdPct: number;
+    enabled: boolean;
+  },
 ): { signal: ScalperSignal | null; decision: MRXDecision } {
   const symbol = gateSymbol.replace("_USDT", "").replace(/_/g, "");
 
@@ -417,6 +423,24 @@ export function evaluateMRXSignal(
     };
   }
 
+  // ── Gate 8: Funding-rate filter (optional, MRX is LONG-only) ────────────
+  // MRX scales into oversold mean-reversion bounces. Buying into a market
+  // where perp funding is heavily positive means piling on as another long
+  // while the crowd is already crowded long — squeeze risk. Default
+  // threshold +0.05% per 8h (~55% APR). Same threshold/semantics as CHT.
+  if (fundingContext?.enabled && fundingContext.rate != null) {
+    const threshold = fundingContext.thresholdPct / 100;
+    if (fundingContext.rate >= threshold) {
+      return {
+        signal: null,
+        decision: {
+          ...base, accepted: false,
+          reason: `Gate 8 [${timeframe}]: long blocked — funding ${(fundingContext.rate * 100).toFixed(4)}% >= +${fundingContext.thresholdPct}% (euphoric long crowd)`,
+        },
+      };
+    }
+  }
+
   // ── All gates passed — compute setup quality on the shared [0,1] channel ──
   //
   // MRX is a hard-gated engine: any of 7 gates rejects. Once the setup passes,
@@ -501,6 +525,10 @@ export async function scanForMRXSignals(params: {
   candleCache?: Map<string, Candle[]>;
   /** Threshold overrides — loaded from DB when not provided. */
   thresholds?: MRXThresholds;
+  /** When true, batch-fetches perp funding rates and applies the long-only gate. */
+  fundingFilterEnabled?: boolean;
+  /** Threshold (pct per 8h, e.g. 0.05) above which long signals are rejected. */
+  fundingThresholdPct?: number;
 }): Promise<ScalperSignal[]> {
   // ── Rolling WR check before each cycle ────────────────────────────────────
   await checkMrxWinRate();
@@ -556,6 +584,16 @@ export async function scanForMRXSignals(params: {
 
   const now = Date.now();
 
+  // ── Batch-fetch perp funding (cached 60s) when the filter is on ───────────
+  const fundingBySymbol = new Map<string, number | null>();
+  if (params.fundingFilterEnabled) {
+    const fr = await Promise.allSettled(
+      symbols.map(async (s) => [s, await getPerpFundingRate(s)] as const),
+    );
+    for (const r of fr) if (r.status === "fulfilled") fundingBySymbol.set(r.value[0], r.value[1]);
+  }
+  const fundingThresholdPct = params.fundingThresholdPct ?? 0.05;
+
   // ── Per-symbol evaluation ─────────────────────────────────────────────────
   const results = await Promise.allSettled(
     symbols.map(async (gateSymbol): Promise<ScalperSignal | null> => {
@@ -587,9 +625,13 @@ export async function scanForMRXSignals(params: {
         { candles: candles3m, tf: "3m" },
       ];
 
+      const fundingContext = params.fundingFilterEnabled
+        ? { rate: fundingBySymbol.get(gateSymbol) ?? null, thresholdPct: fundingThresholdPct, enabled: true }
+        : undefined;
+
       let acceptedSignal: ScalperSignal | null = null;
       for (const { candles, tf } of tfsToTry) {
-        const { signal, decision } = evaluateMRXSignal(gateSymbol, candles, candles15m, candles1h, tf, thresholds);
+        const { signal, decision } = evaluateMRXSignal(gateSymbol, candles, candles15m, candles1h, tf, thresholds, fundingContext);
         if (decision.accepted) {
           logger.info(
             {
