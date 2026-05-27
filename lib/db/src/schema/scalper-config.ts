@@ -92,6 +92,14 @@ export const scalperConfigTable = pgTable("scalper_config", {
   adaptiveRsiLowFloor:   real("adaptive_rsi_low_floor").notNull().default(35),
   adaptiveRsiHighFloor:  real("adaptive_rsi_high_floor").notNull().default(65),
 
+  // Quality-aware sizing — scale position size by the signal's [0,1] quality.
+  // scale = floor + (1 - floor) * quality   →   weakest signal risks `floor`%
+  // of the base size, strongest signal risks 100%. Asymmetric / defensive:
+  // no signal ever exceeds the configured base size.
+  qualityAwareSizing:          boolean("quality_aware_sizing").notNull().default(false),
+  qualitySizeFloorPct:         real("quality_size_floor_pct").notNull().default(50),
+  qualityAwareSizingMicroMode: boolean("quality_aware_sizing_micro_mode").notNull().default(false),
+
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
