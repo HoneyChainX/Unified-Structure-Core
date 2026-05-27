@@ -22,6 +22,7 @@
 
 import { Candle, ScalperSignal, computeEMA, computeRSI, computeVolumeRatio, computeBB, fetchCandles } from "./scalper-signals";
 import { getMarketStatus } from "./market";
+import { getPerpFundingRate } from "./gateio";
 import { logger } from "../lib/logger";
 
 const SWING_LOOKBACK = 3;
@@ -355,7 +356,17 @@ export function evaluateCHTSignal(
   ltfCandles: Candle[],    // LTF candles (3m–4h) — needs 80+ candles
   htfCandles: Candle[],    // HTF candles (per CHT_HTF_MAP) — needs 55+ candles
   btcCandles: Candle[],    // BTC same-TF candles — spread + correlation reference
-  params: { longOnly: boolean; marketContext?: CHTMarketContext | null; timeframe?: string },
+  params: {
+    longOnly: boolean;
+    marketContext?: CHTMarketContext | null;
+    timeframe?: string;
+    /** Predicted perp funding rate as a decimal (e.g. 0.0005 = 0.05% per 8h). null = unavailable. */
+    fundingRate?: number | null;
+    /** Threshold (in pct) above/below which the funding filter rejects. 0.05 = ±0.05%. */
+    fundingThresholdPct?: number;
+    /** Whether the funding filter is active. When false, fundingRate is ignored. */
+    fundingFilterEnabled?: boolean;
+  },
 ): ScalperSignal | null {
   if (ltfCandles.length < 80 || htfCandles.length < 55) return null;
 
@@ -384,6 +395,25 @@ export function evaluateCHTSignal(
   if      (bullishTrend && htfBullish)                     side = "buy";
   else if (!params.longOnly && bearishTrend && htfBearish) side = "sell";
   else                                                     return null;
+
+  // ── 2b. Funding-rate filter ──────────────────────────────────────────────
+  // Reject continuation trades into a crowded book. CHT is trend-following,
+  // so positive funding + LONG = chasing the crowd at peak euphoria; negative
+  // funding + SHORT = selling into capitulation. Both are squeeze setups.
+  // Threshold default 0.05% per 8h ≈ 55% APR — only EXTREME positioning is
+  // filtered, normal funding doesn't block trades.
+  if (params.fundingFilterEnabled && params.fundingRate != null) {
+    const threshold = (params.fundingThresholdPct ?? 0.05) / 100; // pct → decimal
+    const fr = params.fundingRate;
+    if (side === "buy" && fr >= threshold) {
+      logger.debug({ gateSymbol, side, fundingRate: fr, threshold }, "CHT: rejected — long into euphoric positive funding");
+      return null;
+    }
+    if (side === "sell" && fr <= -threshold) {
+      logger.debug({ gateSymbol, side, fundingRate: fr, threshold }, "CHT: rejected — short into capitulation negative funding");
+      return null;
+    }
+  }
 
   // ── 3. Volatility Engine ──────────────────────────────────────────────────
   // ATR% lower bound scales by timeframe: 0.08% for 3m/5m, 0.15% for 15m, 0.3% for 1h+
@@ -538,6 +568,10 @@ export async function scanForCHTSignals(params: {
   symbols: string[];
   /** LTF timeframe to scan (default "5m"). HTF is derived from CHT_HTF_MAP. */
   timeframe?: string;
+  /** When true, fetches perp funding rates and applies the funding filter. */
+  fundingFilterEnabled?: boolean;
+  /** Threshold (pct, e.g. 0.05 = 0.05% per 8h) above/below which signals are rejected. */
+  fundingThresholdPct?: number;
 }): Promise<ScalperSignal[]> {
   const ltfTf  = params.timeframe ?? "5m";
   const htfTf  = CHT_HTF_MAP[ltfTf] ?? "1h";
@@ -568,6 +602,19 @@ export async function scanForCHTSignals(params: {
     logger.warn({ err: marketContextResult.reason }, "CHT scan: CoinGecko market context unavailable");
   }
 
+  // Batch-fetch funding rates only when the filter is enabled — every fetch
+  // hits a public Gate.io endpoint, the result is cached for 60s so concurrent
+  // symbol loops within a single scan share one fetch.
+  const fundingBySymbol = new Map<string, number | null>();
+  if (params.fundingFilterEnabled) {
+    const fundingResults = await Promise.allSettled(
+      params.symbols.map(async (s) => [s, await getPerpFundingRate(s)] as const),
+    );
+    for (const r of fundingResults) {
+      if (r.status === "fulfilled") fundingBySymbol.set(r.value[0], r.value[1]);
+    }
+  }
+
   const results = await Promise.allSettled(
     params.symbols.map(async (gateSymbol) => {
       const [ltf, htf] = await Promise.all([
@@ -578,6 +625,9 @@ export async function scanForCHTSignals(params: {
         ...params,
         marketContext,
         timeframe: ltfTf,
+        fundingFilterEnabled: params.fundingFilterEnabled,
+        fundingThresholdPct: params.fundingThresholdPct,
+        fundingRate: fundingBySymbol.get(gateSymbol) ?? null,
       });
     }),
   );

@@ -392,6 +392,8 @@ export async function runScalperScan(): Promise<void> {
         longOnly: config.longOnly,
         symbols: resolvedSymbols!,
         timeframe: tf,
+        fundingFilterEnabled: config.chtFundingFilterEnabled,
+        fundingThresholdPct: config.chtFundingThresholdPct,
       });
     } else if (strategy === MRX_STRATEGY_TAG) {
       // MRX scans both 1m and 3m internally — call once on the "3m" iteration

@@ -127,6 +127,51 @@ export async function getLivePrice(currencyPair: string): Promise<number> {
   return price;
 }
 
+// ── Perp funding rate (public endpoint, cached) ────────────────────────────
+// We trade spot, but perp funding is a strong sentiment proxy: when funding
+// is extreme, the crowd is heavily positioned and the contrarian side has
+// higher EV. CHT uses this as a soft filter against trend continuation into
+// crowded positioning.
+//
+// Cache: 60s TTL. Funding settles every 8h on Gate.io, so a 1-minute cache
+// has zero accuracy cost and prevents N concurrent symbol fetches per scan.
+interface FundingCacheEntry { rate: number | null; fetchedAt: number; }
+const _fundingCache = new Map<string, FundingCacheEntry>();
+const FUNDING_CACHE_TTL_MS = 60_000;
+
+export async function getPerpFundingRate(spotSymbol: string): Promise<number | null> {
+  // Spot pairs like BTC_USDT map 1:1 to USDT-perp contracts on Gate.io.
+  const contract = spotSymbol;
+  const cached = _fundingCache.get(contract);
+  if (cached && Date.now() - cached.fetchedAt < FUNDING_CACHE_TTL_MS) {
+    return cached.rate;
+  }
+  try {
+    const url = `${BASE}${API_PATH_PREFIX}/futures/usdt/contracts/${contract}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      // 404 = no perp contract for this pair (common for low-cap spot-only listings)
+      _fundingCache.set(contract, { rate: null, fetchedAt: Date.now() });
+      return null;
+    }
+    const data = await res.json() as { funding_rate?: string };
+    const raw = data.funding_rate;
+    const parsed = raw != null && raw !== "" ? parseFloat(raw) : null;
+    const valid = parsed != null && Number.isFinite(parsed) ? parsed : null;
+    _fundingCache.set(contract, { rate: valid, fetchedAt: Date.now() });
+    return valid;
+  } catch (err) {
+    logger.warn({ contract, err }, "getPerpFundingRate: fetch failed");
+    _fundingCache.set(contract, { rate: null, fetchedAt: Date.now() });
+    return null;
+  }
+}
+
+/** Test-only: reset the in-memory funding cache. */
+export function _resetFundingCache(): void {
+  _fundingCache.clear();
+}
+
 export interface SpotOrder {
   id: string;
   status: string;

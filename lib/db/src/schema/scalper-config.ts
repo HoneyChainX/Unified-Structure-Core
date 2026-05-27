@@ -100,6 +100,13 @@ export const scalperConfigTable = pgTable("scalper_config", {
   qualitySizeFloorPct:         real("quality_size_floor_pct").notNull().default(50),
   qualityAwareSizingMicroMode: boolean("quality_aware_sizing_micro_mode").notNull().default(false),
 
+  // CHT funding-rate filter (Phase 2). When enabled, CHT rejects LONG entries
+  // when perp funding is >= +chtFundingThresholdPct (euphoric crowd long) and
+  // SHORT entries when funding is <= -chtFundingThresholdPct (capitulation
+  // crowd short). Default threshold 0.05% per 8h ≈ 55% APR.
+  chtFundingFilterEnabled: boolean("cht_funding_filter_enabled").notNull().default(false),
+  chtFundingThresholdPct:  real("cht_funding_threshold_pct").notNull().default(0.05),
+
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
