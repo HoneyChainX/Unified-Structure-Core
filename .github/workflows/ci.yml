@@ -21,7 +21,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 9.15.4
 
       - name: Install Node
         uses: actions/setup-node@v4
@@ -29,8 +29,14 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: pnpm + node versions
+        run: |
+          node --version
+          pnpm --version
+          cat package.json | head -20
+
       - name: Install deps
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --reporter=append-only
 
       - name: Typecheck
         run: pnpm run typecheck
@@ -63,7 +69,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 9.15.4
 
       - name: Install Node
         uses: actions/setup-node@v4
