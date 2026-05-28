@@ -402,6 +402,8 @@ export async function runScalperScan(): Promise<void> {
       tfSignals = await scanForMRXSignals({
         symbols: resolvedSymbols!,
         candleCache: new Map(), // executor cycle has no pre-populated cache here
+        fundingFilterEnabled: config.mrxFundingFilterEnabled,
+        fundingThresholdPct: config.mrxFundingThresholdPct,
       });
     } else {
       tfSignals = await scanForSignals({

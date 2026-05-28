@@ -107,6 +107,12 @@ export const scalperConfigTable = pgTable("scalper_config", {
   chtFundingFilterEnabled: boolean("cht_funding_filter_enabled").notNull().default(false),
   chtFundingThresholdPct:  real("cht_funding_threshold_pct").notNull().default(0.05),
 
+  // MRX funding-rate filter (LONG-only — rejects when perp funding indicates
+  // euphoric long positioning). Same semantics as CHT but enabled separately
+  // since the two engines have different signal profiles.
+  mrxFundingFilterEnabled: boolean("mrx_funding_filter_enabled").notNull().default(false),
+  mrxFundingThresholdPct:  real("mrx_funding_threshold_pct").notNull().default(0.05),
+
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
