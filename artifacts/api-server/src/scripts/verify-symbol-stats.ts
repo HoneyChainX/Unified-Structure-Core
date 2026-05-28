@@ -77,7 +77,7 @@ async function main() {
 
   const normalised = rows
     .filter((r) => r.pnl != null && r.closedAt != null)
-    .map((r) => ({ ...r, pnl: parseFloat(r.pnl!), closedAt: r.closedAt! }));
+    .map((r) => ({ ...r, pnl: Number(r.pnl), closedAt: r.closedAt! }));
 
   const stats = computeStats(normalised, 30, 5);
   const btc = stats.find((s) => s.gateSymbol === "BTC_USDT")!;
