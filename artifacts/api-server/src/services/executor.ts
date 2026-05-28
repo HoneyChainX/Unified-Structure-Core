@@ -16,6 +16,7 @@ import { pnlFromFills } from "./fees";
 import { getMarketStatus } from "./market";
 import { logger } from "../lib/logger";
 import { notifyTradeOpened } from "./notify";
+import { notifyMobile } from "./notify-mobile";
 import { checkRiskGuard } from "./risk-guard";
 
 const GRADE_ORDER: Record<string, number> = {
@@ -457,6 +458,7 @@ export async function executeSignal(signal: Signal): Promise<void> {
           tp1OrderId: null, tp2OrderId: null, tp3OrderId: null,
         });
         logger.warn({ tradeId: trade.id, closePrice, net: fillMath.net }, "Bot: EMERGENCY CLOSE executed — SL placement failed");
+        void notifyMobile.emergencyClose(signal.symbol, fillMath.net).catch(() => {});
         for (const key of ["tp1OrderId", "tp2OrderId", "tp3OrderId"] as const) {
           const oid = tpOrders[key];
           if (oid) {

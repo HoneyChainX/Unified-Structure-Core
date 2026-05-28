@@ -14,6 +14,7 @@
 import { db, riskConfigTable, tradesTable, scalperTradesTable } from "@workspace/db";
 import { and, gte, isNotNull, inArray, sql } from "drizzle-orm";
 import { getCombinedOpenExposure } from "./exposure";
+import { notifyMobile } from "./notify-mobile";
 import { logger } from "../lib/logger";
 
 export interface RiskGuardInput {
@@ -126,6 +127,8 @@ export async function checkRiskGuard(input: RiskGuardInput): Promise<RiskGuardRe
       } catch (err) {
         logger.warn({ err }, "risk-guard: failed to auto-trip kill switch on daily-loss breach");
       }
+      // Mobile alert (best-effort — no-op if FCM not configured)
+      void notifyMobile.dailyLoss(lossPct, cfg.dailyLossLimitPct).catch(() => {});
       return {
         allowed: false,
         reasonCode: "daily_loss_breached",
@@ -145,4 +148,8 @@ export async function setKillSwitch(on: boolean, reason: number | null = null): 
     updatedAt: new Date(),
   });
   logger.warn({ killSwitch: on, reason }, on ? "risk-guard: KILL SWITCH ENGAGED" : "risk-guard: kill switch cleared");
+  if (on) {
+    const reasonLabel = reason === 1 ? "Daily-loss breaker tripped" : reason === 2 ? "Manual halt" : "Trading paused";
+    void notifyMobile.killSwitch(reasonLabel).catch(() => {});
+  }
 }
