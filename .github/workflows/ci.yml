@@ -6,10 +6,14 @@ on:
   push:
     branches: [main]
 
-# Cancel an older run for the same branch when a new commit is pushed.
+# Let runs complete naturally. Earlier we used cancel-in-progress: true with
+# group=github.ref, but for PR events GitHub uses refs/pull/N/merge as the
+# ref and consecutive pushes left "higher priority waiting" requests that
+# cancelled running jobs mid-flight. Better to pay the extra CI minutes
+# than chase ghosts.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   typecheck:
