@@ -936,5 +936,90 @@ router.post("/trade/:id/close", async (req, res): Promise<void> => {
   }
 });
 
+// ── Per-symbol stats with Kelly diagnostics ────────────────────────────────
+// Returns per-symbol breakdown of closed trades + the same inputs the Kelly
+// sizer would consume (win rate, avg win, avg loss, payoff ratio, raw Kelly
+// fraction). Useful for: "why is BTC getting floor-sized?" or "ETH has
+// f*=0.4, should I be sizing bigger there?".
+//
+// Query: ?lookback=N (default 30) — most-recent N closed trades per symbol.
+//        ?minTrades=N (default 5) — symbols with fewer trades are listed
+//        but flagged. The Kelly numbers below this threshold are unreliable.
+router.get("/symbol-stats", async (req, res): Promise<void> => {
+  const lookback = Math.max(1, Math.min(500, parseInt(String(req.query.lookback ?? "30"), 10) || 30));
+  const minTrades = Math.max(1, Math.min(100, parseInt(String(req.query.minTrades ?? "5"), 10) || 5));
+
+  const closed = await db
+    .select({
+      gateSymbol: scalperTradesTable.gateSymbol,
+      symbol: scalperTradesTable.symbol,
+      pnl: scalperTradesTable.pnl,
+      strategy: scalperTradesTable.strategy,
+      closedAt: scalperTradesTable.closedAt,
+    })
+    .from(scalperTradesTable)
+    .where(inArray(scalperTradesTable.status, ["closed"]))
+    .orderBy(desc(scalperTradesTable.closedAt));
+
+  // Group by symbol, keep last `lookback` per symbol (already ordered DESC)
+  const bySymbol = new Map<string, typeof closed>();
+  for (const t of closed) {
+    if (t.pnl == null) continue;
+    const arr = bySymbol.get(t.gateSymbol) ?? [];
+    if (arr.length < lookback) {
+      arr.push(t);
+      bySymbol.set(t.gateSymbol, arr);
+    }
+  }
+
+  const rows = [...bySymbol.entries()].map(([gateSymbol, trades]) => {
+    const pnls = trades.map((t) => Number(t.pnl));
+    const wins = pnls.filter((p) => p > 0);
+    const losses = pnls.filter((p) => p < 0).map(Math.abs);
+    const winRate = trades.length > 0 ? wins.length / trades.length : null;
+    const avgWin = wins.length > 0 ? wins.reduce((a, b) => a + b, 0) / wins.length : null;
+    const avgLoss = losses.length > 0 ? losses.reduce((a, b) => a + b, 0) / losses.length : null;
+    const netPnl = pnls.reduce((a, b) => a + b, 0);
+    const payoffRatio = avgWin != null && avgLoss != null && avgLoss > 0 ? avgWin / avgLoss : null;
+    const kellyFraction = winRate != null && payoffRatio != null
+      ? winRate - (1 - winRate) / payoffRatio
+      : null;
+    const lastClosedAt = trades[0]?.closedAt ?? null;
+    const lastStrategy = trades[0]?.strategy ?? null;
+    return {
+      gateSymbol,
+      symbol: trades[0]?.symbol ?? gateSymbol,
+      trades: trades.length,
+      wins: wins.length,
+      losses: losses.length,
+      winRate,
+      avgWin,
+      avgLoss,
+      netPnl,
+      payoffRatio,
+      kellyFraction,
+      reliable: trades.length >= minTrades,
+      lastClosedAt,
+      lastStrategy,
+    };
+  });
+
+  // Sort by Kelly fraction DESC (best edge first), then by trade count DESC
+  rows.sort((a, b) => {
+    const ka = a.kellyFraction ?? -Infinity;
+    const kb = b.kellyFraction ?? -Infinity;
+    if (ka !== kb) return kb - ka;
+    return b.trades - a.trades;
+  });
+
+  res.json({
+    lookback,
+    minTrades,
+    totalSymbols: rows.length,
+    reliableCount: rows.filter((r) => r.reliable).length,
+    rows,
+  });
+});
+
 export default router;
 
