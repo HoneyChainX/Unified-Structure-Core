@@ -200,6 +200,38 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
   const isMrxFixed = (config as { tpMode?: string }).tpMode === "mrx_fixed"
     || signal.strategy === "mrx-hybrid";
 
+  // ── Quality-aware sizing (Phase 2) ────────────────────────────────────────
+  // When enabled, scale positionSize by setup quality so weaker setups risk
+  // less and stronger setups get the configured size. Asymmetric by design:
+  // no quality value can push size ABOVE the base — only at or below.
+  //
+  //   scale = floor + (1 - floor) * quality        floor ∈ [0,1], quality ∈ [0,1]
+  //
+  // Micro mode is risk-defined (1R = fixed USDT) — scaling its size changes
+  // the R-multiple contract, so it's opt-in via qualityAwareSizingMicroMode.
+  const qCfg = config as {
+    qualityAwareSizing?: boolean;
+    qualitySizeFloorPct?: number;
+    qualityAwareSizingMicroMode?: boolean;
+  };
+  const applyQualityScaling = qCfg.qualityAwareSizing === true
+    && (!isMicro || qCfg.qualityAwareSizingMicroMode === true);
+  if (applyQualityScaling) {
+    const q = Math.min(1, Math.max(0, signal.quality ?? 0));
+    const floor = Math.min(1, Math.max(0, (qCfg.qualitySizeFloorPct ?? 50) / 100));
+    const scale = floor + (1 - floor) * q;
+    const scaledSize = positionSize * scale;
+    logger.info(
+      {
+        symbol: signal.gateSymbol, quality: q.toFixed(3),
+        baseSize: positionSize.toFixed(4), scaledSize: scaledSize.toFixed(4),
+        scale: scale.toFixed(3), floor,
+      },
+      "Scalper: quality-aware sizing applied",
+    );
+    positionSize = scaledSize;
+  }
+
   let quantity: number;
   let microSlDist: number | null = null;
   let microTp1: number | null = null;
@@ -331,6 +363,8 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
                       ? parseFloat((microTp2 ?? 0).toFixed(8))
                       : isCht ? parseFloat(signal.tp2Price!.toFixed(8)) : undefined,
     tp3Price:       isCht ? parseFloat(signal.tp3Price!.toFixed(8)) : undefined,
+    // Shared 0..1 quality score; null when the signal engine didn't populate it.
+    quality:        signal.quality != null ? signal.quality.toFixed(6) : null,
   };
 
   const [trade] = await db.insert(scalperTradesTable).values({

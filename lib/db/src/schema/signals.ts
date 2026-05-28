@@ -7,6 +7,7 @@ import {
   integer,
   boolean,
   jsonb,
+  numeric,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -51,6 +52,9 @@ export const signalsTable = pgTable("signals", {
 
   tf2: text("tf2"),
   tf3: text("tf3"),
+
+  /** Setup-quality score in [0,1] — common channel for cross-engine ranking. */
+  quality: numeric("quality", { precision: 8, scale: 6 }),
 
   rawPayload: jsonb("raw_payload"),
 });

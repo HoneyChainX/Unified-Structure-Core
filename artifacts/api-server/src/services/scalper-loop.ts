@@ -392,6 +392,8 @@ export async function runScalperScan(): Promise<void> {
         longOnly: config.longOnly,
         symbols: resolvedSymbols!,
         timeframe: tf,
+        fundingFilterEnabled: config.chtFundingFilterEnabled,
+        fundingThresholdPct: config.chtFundingThresholdPct,
       });
     } else if (strategy === MRX_STRATEGY_TAG) {
       // MRX scans both 1m and 3m internally — call once on the "3m" iteration
@@ -414,17 +416,36 @@ export async function runScalperScan(): Promise<void> {
         emaPeriod: config.emaPeriod,
         symbols: resolvedSymbols ?? undefined,
         timeframe: tf,
+        adaptiveThresholds:   config.adaptiveThresholds,
+        adaptiveWindow:       config.adaptiveWindow,
+        adaptiveLowQ:         config.adaptiveLowQ,
+        adaptiveHighQ:        config.adaptiveHighQ,
+        adaptiveRsiLowFloor:  config.adaptiveRsiLowFloor,
+        adaptiveRsiHighFloor: config.adaptiveRsiHighFloor,
       });
     }
 
+    // Per-symbol dedup: keep the higher-quality signal when the same symbol
+    // fires across multiple timeframes (e.g. 3m + 5m). Quality is the shared
+    // 0..1 score populated by adaptive BB+RSI / CHT / SMC. Signals without a
+    // quality score (legacy fixed-threshold path) are treated as quality=0,
+    // so any scored signal beats an unscored one for the same symbol.
     for (const sig of tfSignals) {
-      if (!signalsBySymbol.has(sig.gateSymbol)) {
+      const existing = signalsBySymbol.get(sig.gateSymbol);
+      const newQ = sig.quality ?? 0;
+      const oldQ = existing?.quality ?? 0;
+      if (!existing || newQ > oldQ) {
         signalsBySymbol.set(sig.gateSymbol, sig);
       }
     }
   }
 
-  const signals = [...signalsBySymbol.values()];
+  // Global ranking: sort by quality DESC so the executor tries the best
+  // candidates first when maxOpenTrades is near its cap. Unscored signals
+  // fall to the end of the queue but are still executed if slots remain.
+  const signals = [...signalsBySymbol.values()].sort(
+    (a, b) => (b.quality ?? 0) - (a.quality ?? 0),
+  );
   scalperLoopLastRunAt = new Date();
   scalperLoopLastSignalCount = signals.length;
 

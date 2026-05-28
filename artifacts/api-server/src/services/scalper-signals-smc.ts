@@ -201,6 +201,23 @@ export function evaluateSMCSignal(
   const symbol    = gateSymbol.replace("_USDT", "").replace("_", "");
   const lastClose = candles[candles.length - 1].close;
 
+  /**
+   * Map an SMC setup's R:R into the shared [0,1] quality channel.
+   *
+   *   R:R ≤ 1.0  → 0.0     (rejected upstream, but defensive)
+   *   R:R = 2.5  → 0.50
+   *   R:R = 4.0  → 1.00    (Fib 4.236-driven targets routinely land here)
+   *
+   * Saturates at 1.0 so absurd R:R outliers don't dominate the ranker.
+   */
+  const smcQuality = (entry: number, tp: number, sl: number): number => {
+    const reward = Math.abs(tp - entry);
+    const risk = Math.abs(entry - sl);
+    if (risk <= 0) return 0;
+    const rr = reward / risk;
+    return Math.min(1, Math.max(0, (rr - 1) / 3));
+  };
+
   const bullish = findBullishMSS(candles);
   if (bullish) {
     return {
@@ -217,6 +234,7 @@ export function evaluateSMCSignal(
       rsi: 0,
       volumeRatio: 0,
       strategy: "smc_mss",
+      quality: smcQuality(lastClose, bullish.fibTarget, bullish.slLevel),
     };
   }
 
@@ -236,6 +254,7 @@ export function evaluateSMCSignal(
         rsi: 0,
         volumeRatio: 0,
         strategy: "smc_mss",
+        quality: smcQuality(lastClose, bearish.fibTarget, bearish.slLevel),
       };
     }
   }

@@ -81,6 +81,32 @@ export const scalperConfigTable = pgTable("scalper_config", {
   mrxBbWidthMin3m: real("mrx_bb_width_min_3m").notNull().default(0.6),
   mrxBbWidthMax3m: real("mrx_bb_width_max_3m").notNull().default(5.0),
 
+  // Adaptive RSI thresholds (BB+RSI engine). When enabled, rsiOversold /
+  // rsiOverbought are replaced with rolling quantiles of the symbol's own
+  // RSI distribution over `adaptiveWindow` bars. The floors clamp the
+  // adaptive bounds so quiet markets don't fire at RSI 45/55.
+  adaptiveThresholds:    boolean("adaptive_thresholds").notNull().default(false),
+  adaptiveWindow:        integer("adaptive_window").notNull().default(100),
+  adaptiveLowQ:          real("adaptive_low_q").notNull().default(0.05),
+  adaptiveHighQ:         real("adaptive_high_q").notNull().default(0.95),
+  adaptiveRsiLowFloor:   real("adaptive_rsi_low_floor").notNull().default(35),
+  adaptiveRsiHighFloor:  real("adaptive_rsi_high_floor").notNull().default(65),
+
+  // Quality-aware sizing — scale position size by the signal's [0,1] quality.
+  // scale = floor + (1 - floor) * quality   →   weakest signal risks `floor`%
+  // of the base size, strongest signal risks 100%. Asymmetric / defensive:
+  // no signal ever exceeds the configured base size.
+  qualityAwareSizing:          boolean("quality_aware_sizing").notNull().default(false),
+  qualitySizeFloorPct:         real("quality_size_floor_pct").notNull().default(50),
+  qualityAwareSizingMicroMode: boolean("quality_aware_sizing_micro_mode").notNull().default(false),
+
+  // CHT funding-rate filter (Phase 2). When enabled, CHT rejects LONG entries
+  // when perp funding is >= +chtFundingThresholdPct (euphoric crowd long) and
+  // SHORT entries when funding is <= -chtFundingThresholdPct (capitulation
+  // crowd short). Default threshold 0.05% per 8h ≈ 55% APR.
+  chtFundingFilterEnabled: boolean("cht_funding_filter_enabled").notNull().default(false),
+  chtFundingThresholdPct:  real("cht_funding_threshold_pct").notNull().default(0.05),
+
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

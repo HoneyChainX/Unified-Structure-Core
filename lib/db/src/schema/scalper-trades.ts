@@ -62,6 +62,8 @@ export const scalperTradesTable = pgTable("scalper_trades", {
   bbMid: real("bb_mid"),
   rsi: real("rsi"),
   volumeRatio: real("volume_ratio"),
+  /** Setup-quality score in [0,1] — see scalper-signals.ts. */
+  quality: numeric("quality", { precision: 8, scale: 6 }),
 
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   closedAt: timestamp("closed_at", { withTimezone: true }),
