@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Let runs complete naturally. Earlier we used cancel-in-progress: true with
+# group=github.ref, but for PR events GitHub uses refs/pull/N/merge as the
+# ref and consecutive pushes left "higher priority waiting" requests that
+# cancelled running jobs mid-flight. Better to pay the extra CI minutes
+# than chase ghosts.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  typecheck:
+    name: Typecheck (all workspaces)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: pnpm + node versions
+        run: |
+          node --version
+          pnpm --version
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile --reporter=append-only
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+  verify:
+    name: Run verification scripts
+    runs-on: ubuntu-latest
+    needs: typecheck
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: verify
+          POSTGRES_PASSWORD: verify
+          POSTGRES_DB: verify
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U verify"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://verify:verify@localhost:5432/verify
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply drizzle schema
+        run: pnpm --filter @workspace/db run push
+        continue-on-error: true   # safe on first-run / pristine main
+
+      - name: Apply SQL migrations (in numeric order)
+        run: |
+          shopt -s nullglob
+          for f in lib/db/migrations/*.sql; do
+            echo "── $f ──"
+            PGPASSWORD=verify psql -h localhost -U verify -d verify -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+      - name: Run all verify-*.ts scripts
+        # Each script self-asserts and exits non-zero on failure. Glob is
+        # nullglob-safe — when no verifiers exist yet (pristine main), the
+        # step succeeds with a no-op message. We run tsx via the scripts
+        # workspace (which already lists it in its devDependencies) and pass
+        # an absolute path so CWD doesn't matter.
+        run: |
+          shopt -s nullglob
+          scripts=(artifacts/api-server/src/scripts/verify-*.ts)
+          if [ ${#scripts[@]} -eq 0 ]; then
+            echo "No verify-*.ts scripts found — skipping."
+            exit 0
+          fi
+          failures=0
+          for s in "${scripts[@]}"; do
+            echo "═══ $s ═══"
+            if ! pnpm --filter @workspace/scripts exec tsx "$GITHUB_WORKSPACE/$s" 2>&1; then
+              echo "::error::FAILED: $s"
+              failures=$((failures + 1))
+            fi
+          done
+          if [ $failures -gt 0 ]; then
+            echo "::error::$failures verifier(s) failed"
+            exit 1
+          fi
+          echo "All verifiers passed."
