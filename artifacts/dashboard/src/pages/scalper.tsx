@@ -142,6 +142,22 @@ interface ScalperConfig {
   symbolAllowlist: string | null;
   scanPoolSize: number;
   strategy: string;
+  // Phase 2: adaptive RSI thresholds (BB+RSI engine)
+  adaptiveThresholds: boolean;
+  adaptiveWindow: number;
+  adaptiveLowQ: number;
+  adaptiveHighQ: number;
+  adaptiveRsiLowFloor: number;
+  adaptiveRsiHighFloor: number;
+  // Phase 2: quality-aware sizing
+  qualityAwareSizing: boolean;
+  qualitySizeFloorPct: number;
+  qualityAwareSizingMicroMode: boolean;
+  // Phase 2: funding-rate filters
+  chtFundingFilterEnabled: boolean;
+  chtFundingThresholdPct: number;
+  mrxFundingFilterEnabled: boolean;
+  mrxFundingThresholdPct: number;
   updatedAt: string;
 }
 
@@ -552,6 +568,7 @@ export function ScalperPage() {
   const [scanning, setScanning] = useState(false);
   const [scanData, setScanData] = useState<ScanRow[] | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showQualityFilters, setShowQualityFilters] = useState(false);
   const [showScan, setShowScan] = useState(false);
   const [draft, setDraft] = useState<Partial<ScalperConfig>>({});
 
@@ -1917,6 +1934,200 @@ export function ScalperPage() {
             )}
           </div>
         )}
+
+        {/* PHASE 2: QUALITY & FILTERS — adaptive thresholds, quality-aware sizing, funding-rate filters */}
+        <div className="border-t border-border">
+          <button
+            onClick={() => setShowQualityFilters((v) => !v)}
+            className="w-full flex items-center justify-between px-4 py-3 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/20 transition-colors"
+          >
+            <span className="tracking-widest font-bold">
+              <span className="text-cyan-400">◆</span> QUALITY &amp; FILTERS (PHASE 2)
+            </span>
+            {showQualityFilters ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </button>
+
+          {showQualityFilters && (
+            <div className="p-4 space-y-4 bg-cyan-500/5 border-l-2 border-cyan-500/30">
+              {/* ── Adaptive RSI thresholds (BB+RSI only) ───────────────────── */}
+              {field("strategy", "bb_rsi") === "bb_rsi" && (
+                <div className="border border-border bg-secondary/30 p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-sm font-bold mb-0.5 flex items-center gap-2">
+                        <span className="text-cyan-400 font-mono text-xs">RSI</span> Adaptive Thresholds
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        Replace fixed RSI {field("rsiOversold", 30)}/{field("rsiOverbought", 70)} cutoffs with rolling per-symbol quantiles.
+                        Quiet markets get tighter bounds; volatile markets get wider ones. Floors prevent firing at neutral RSI.
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => set("adaptiveThresholds", !field("adaptiveThresholds", false))}
+                      className={`ml-4 relative w-12 h-6 flex-shrink-0 rounded-full border transition-colors ${field("adaptiveThresholds", false) ? "border-cyan-500 bg-cyan-500/20" : "border-border bg-secondary"}`}
+                    >
+                      <span className={`absolute top-0.5 w-5 h-5 rounded-full transition-all ${field("adaptiveThresholds", false) ? "left-6 bg-cyan-400" : "left-0.5 bg-muted-foreground/50"}`} />
+                    </button>
+                  </div>
+
+                  {field("adaptiveThresholds", false) && (
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-3 pt-2 border-t border-border/50">
+                      {[
+                        { key: "adaptiveWindow", label: "WINDOW (BARS)", min: 20, max: 500, step: 10, fallback: 100 },
+                        { key: "adaptiveLowQ", label: "LOW QUANTILE", min: 0.01, max: 0.20, step: 0.01, fallback: 0.05 },
+                        { key: "adaptiveHighQ", label: "HIGH QUANTILE", min: 0.80, max: 0.99, step: 0.01, fallback: 0.95 },
+                        { key: "adaptiveRsiLowFloor", label: "OVERSOLD FLOOR", min: 20, max: 45, step: 1, fallback: 35 },
+                        { key: "adaptiveRsiHighFloor", label: "OVERBOUGHT FLOOR", min: 55, max: 80, step: 1, fallback: 65 },
+                      ].map(({ key, label, min, max, step, fallback }) => (
+                        <div key={key} className="space-y-1">
+                          <label className="text-[10px] text-muted-foreground tracking-widest">{label}</label>
+                          <input
+                            type="number" min={min} max={max} step={step}
+                            value={field(key as keyof ScalperConfig, fallback) as number}
+                            onChange={(e) => set(key as keyof ScalperConfig, parseFloat(e.target.value) as never)}
+                            className="w-full bg-secondary border border-border px-2 py-1 text-xs font-mono focus:outline-none focus:border-cyan-400"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── Quality-aware sizing (all strategies) ─────────────────── */}
+              <div className="border border-border bg-secondary/30 p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-bold mb-0.5 flex items-center gap-2">
+                      <span className="text-cyan-400 font-mono text-xs">SIZE</span> Quality-Aware Sizing
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Scale position size by the signal's [0,1] quality score.
+                      <code className="text-cyan-300/80"> size = base × ({fmt(field("qualitySizeFloorPct", 50) / 100, 2)} + {fmt(1 - field("qualitySizeFloorPct", 50) / 100, 2)} × quality)</code>.
+                      Weak signals risk {field("qualitySizeFloorPct", 50)}% of base, strong signals risk 100%. Never exceeds base.
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => set("qualityAwareSizing", !field("qualityAwareSizing", false))}
+                    className={`ml-4 relative w-12 h-6 flex-shrink-0 rounded-full border transition-colors ${field("qualityAwareSizing", false) ? "border-cyan-500 bg-cyan-500/20" : "border-border bg-secondary"}`}
+                  >
+                    <span className={`absolute top-0.5 w-5 h-5 rounded-full transition-all ${field("qualityAwareSizing", false) ? "left-6 bg-cyan-400" : "left-0.5 bg-muted-foreground/50"}`} />
+                  </button>
+                </div>
+
+                {field("qualityAwareSizing", false) && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-border/50">
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-muted-foreground tracking-widest">SIZE FLOOR (%)</label>
+                      <input
+                        type="number" min={0} max={100} step={5}
+                        value={field("qualitySizeFloorPct", 50) as number}
+                        onChange={(e) => set("qualitySizeFloorPct", parseFloat(e.target.value) as never)}
+                        className="w-full bg-secondary border border-border px-2 py-1 text-xs font-mono focus:outline-none focus:border-cyan-400"
+                      />
+                      <div className="text-[10px] text-muted-foreground">Weakest signal (quality=0) gets this % of base size.</div>
+                    </div>
+                    {field("tpMode", "fixed_usdt") === "micro_2usd" && (
+                      <div className="flex items-center justify-between p-2 bg-orange-500/5 border border-orange-500/20">
+                        <div>
+                          <div className="text-[11px] text-orange-300 font-bold">APPLY TO MICRO MODE</div>
+                          <div className="text-[10px] text-muted-foreground">Off by default — Micro mode is risk-defined (1R = fixed USDT). Scaling breaks that contract.</div>
+                        </div>
+                        <button
+                          onClick={() => set("qualityAwareSizingMicroMode", !field("qualityAwareSizingMicroMode", false))}
+                          className={`ml-2 relative w-10 h-5 flex-shrink-0 rounded-full border transition-colors ${field("qualityAwareSizingMicroMode", false) ? "border-orange-500 bg-orange-500/20" : "border-border bg-secondary"}`}
+                        >
+                          <span className={`absolute top-0.5 w-4 h-4 rounded-full transition-all ${field("qualityAwareSizingMicroMode", false) ? "left-5 bg-orange-400" : "left-0.5 bg-muted-foreground/50"}`} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* ── CHT funding-rate filter (CHT only) ────────────────────── */}
+              {field("strategy", "bb_rsi") === "cht" && (
+                <div className="border border-border bg-secondary/30 p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-sm font-bold mb-0.5 flex items-center gap-2">
+                        <span className="text-fuchsia-400 font-mono text-xs">CHT</span> Funding-Rate Filter
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        Reject CHT longs when perp funding ≥ +{fmt(field("chtFundingThresholdPct", 0.05), 2)}% (crowd is crowded long → squeeze risk).
+                        Symmetric for shorts at ≤ -{fmt(field("chtFundingThresholdPct", 0.05), 2)}%. Normal funding has no effect.
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => set("chtFundingFilterEnabled", !field("chtFundingFilterEnabled", false))}
+                      className={`ml-4 relative w-12 h-6 flex-shrink-0 rounded-full border transition-colors ${field("chtFundingFilterEnabled", false) ? "border-fuchsia-500 bg-fuchsia-500/20" : "border-border bg-secondary"}`}
+                    >
+                      <span className={`absolute top-0.5 w-5 h-5 rounded-full transition-all ${field("chtFundingFilterEnabled", false) ? "left-6 bg-fuchsia-400" : "left-0.5 bg-muted-foreground/50"}`} />
+                    </button>
+                  </div>
+
+                  {field("chtFundingFilterEnabled", false) && (
+                    <div className="pt-2 border-t border-border/50">
+                      <label className="text-[10px] text-muted-foreground tracking-widest">THRESHOLD (% PER 8H)</label>
+                      <input
+                        type="number" min={0.01} max={0.50} step={0.01}
+                        value={field("chtFundingThresholdPct", 0.05) as number}
+                        onChange={(e) => set("chtFundingThresholdPct", parseFloat(e.target.value) as never)}
+                        className="w-full md:w-48 bg-secondary border border-border px-2 py-1 text-xs font-mono focus:outline-none focus:border-fuchsia-400"
+                      />
+                      <div className="text-[10px] text-muted-foreground mt-1">
+                        0.05% per 8h ≈ 55% APR. Only EXTREME positioning triggers a block.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── MRX funding-rate filter (MRX only, LONG-only) ─────────── */}
+              {field("strategy", "bb_rsi") === "mrx-hybrid" && (
+                <div className="border border-border bg-secondary/30 p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-sm font-bold mb-0.5 flex items-center gap-2">
+                        <span className="text-orange-400 font-mono text-xs">MRX</span> Funding-Rate Filter (LONG-only)
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        Reject MRX entries when perp funding ≥ +{fmt(field("mrxFundingThresholdPct", 0.05), 2)}% (crowd already crowded long).
+                        Negative funding never blocks (MRX is LONG-only). Normal funding has no effect.
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => set("mrxFundingFilterEnabled", !field("mrxFundingFilterEnabled", false))}
+                      className={`ml-4 relative w-12 h-6 flex-shrink-0 rounded-full border transition-colors ${field("mrxFundingFilterEnabled", false) ? "border-orange-500 bg-orange-500/20" : "border-border bg-secondary"}`}
+                    >
+                      <span className={`absolute top-0.5 w-5 h-5 rounded-full transition-all ${field("mrxFundingFilterEnabled", false) ? "left-6 bg-orange-400" : "left-0.5 bg-muted-foreground/50"}`} />
+                    </button>
+                  </div>
+
+                  {field("mrxFundingFilterEnabled", false) && (
+                    <div className="pt-2 border-t border-border/50">
+                      <label className="text-[10px] text-muted-foreground tracking-widest">THRESHOLD (% PER 8H)</label>
+                      <input
+                        type="number" min={0.01} max={0.50} step={0.01}
+                        value={field("mrxFundingThresholdPct", 0.05) as number}
+                        onChange={(e) => set("mrxFundingThresholdPct", parseFloat(e.target.value) as never)}
+                        className="w-full md:w-48 bg-secondary border border-border px-2 py-1 text-xs font-mono focus:outline-none focus:border-orange-400"
+                      />
+                      <div className="text-[10px] text-muted-foreground mt-1">
+                        0.05% per 8h ≈ 55% APR. Same convention as CHT.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="text-[11px] text-cyan-300/60 border border-cyan-500/20 bg-cyan-500/5 p-2 leading-relaxed">
+                All Phase 2 filters are disabled by default. Flip them on per-account once you've verified behaviour in paper mode.
+                The <code className="text-cyan-300">quality</code> column on signals/trades is populated regardless and visible in analytics.
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* SMC strategy info panel */}
         {field("strategy", "bb_rsi") === "smc_mss" && (
