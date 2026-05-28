@@ -24,6 +24,7 @@ import {
 } from "./gateio";
 import type { ScalperSignal } from "./scalper-signals";
 import { logger } from "../lib/logger";
+import { notifyMobile } from "./notify-mobile";
 import { checkRiskGuard } from "./risk-guard";
 import { pnlFromFills } from "./fees";
 
@@ -68,6 +69,7 @@ async function emergencyCloseScalperPosition(args: {
       { tradeId: args.tradeId, closePrice, net: fillMath.net, fees: fillMath.fees },
       "Scalper: EMERGENCY CLOSE executed — SL placement failed, position market-closed",
     );
+    void notifyMobile.emergencyClose(args.gateSymbol.replace("_USDT", ""), fillMath.net).catch(() => {});
     return { closePrice, net: fillMath.net, fees: fillMath.fees };
   } catch (err) {
     logger.error(
