@@ -7,6 +7,7 @@ import scalperRouter from "./scalper";
 import devRouter from "./dev";
 import riskRouter from "./risk";
 import mobileRouter from "./mobile";
+import devicesRouter from "./devices";
 
 const router: IRouter = Router();
 
@@ -18,5 +19,6 @@ router.use("/scalper", scalperRouter);
 router.use("/dev", devRouter);
 router.use("/risk", riskRouter);
 router.use("/mobile", mobileRouter);
+router.use("/devices", devicesRouter);
 
 export default router;

@@ -10,6 +10,7 @@ import { BotPage } from "@/pages/bot";
 import { AnalyticsPage } from "@/pages/analytics";
 import { BacktestPage } from "@/pages/backtest";
 import { ScalperPage } from "@/pages/scalper";
+import { DevicesPage } from "@/pages/devices";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -25,6 +26,7 @@ function Router() {
         <Route path="/analytics" component={AnalyticsPage} />
         <Route path="/backtest" component={BacktestPage} />
         <Route path="/scalper" component={ScalperPage} />
+        <Route path="/devices" component={DevicesPage} />
         <Route component={NotFound} />
       </Switch>
     </Layout>
