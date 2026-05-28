@@ -31,6 +31,7 @@ import {
 } from "./scalper-signals-cht";
 import { scanForMRXSignals, evaluateMRXSignal, loadMRXThresholdsFromConfig, MRX_STRATEGY_TAG } from "./scalper-signals-mrx";
 import { executeScalperSignal } from "./scalper-executor";
+import { notifyMobile } from "./notify-mobile";
 import { getMarketStatus } from "./market";
 import { logger } from "../lib/logger";
 
@@ -60,6 +61,33 @@ function getExecutionTimeframes(config: typeof scalperConfigTable.$inferSelect):
 
 export let scalperLoopLastRunAt: Date | null = null;
 export let scalperLoopLastSignalCount = 0;
+
+// ── High-quality-signal push throttle ──────────────────────────────────────
+// We push when a scored signal lands on the executor queue. The same setup
+// often re-fires every 2.5min until conditions change — without dedup, a
+// single oversold pullback would send 10+ notifications in an hour. Key by
+// "symbol-side", track first-seen, suppress for SIGNAL_PUSH_TTL_MS.
+const SIGNAL_PUSH_TTL_MS = 30 * 60_000;            // 30 minutes
+const SIGNAL_PUSH_MIN_QUALITY = 0.7;               // server-side floor; per-device threshold filters further
+const _recentSignalPushes = new Map<string, number>();
+function maybePushSignal(args: { symbol: string; side: "buy" | "sell"; strategy: string; quality: number }): void {
+  if (args.quality < SIGNAL_PUSH_MIN_QUALITY) return;
+  const key = `${args.symbol}-${args.side}`;
+  const now = Date.now();
+  const last = _recentSignalPushes.get(key);
+  if (last != null && now - last < SIGNAL_PUSH_TTL_MS) return;
+  _recentSignalPushes.set(key, now);
+  // Garbage-collect stale entries while we're here (cheap on small map).
+  for (const [k, t] of _recentSignalPushes) {
+    if (now - t > SIGNAL_PUSH_TTL_MS) _recentSignalPushes.delete(k);
+  }
+  void notifyMobile.highQualitySignal(args).catch(() => {});
+}
+
+/** Test-only: reset the push throttle. */
+export function _resetSignalPushThrottle(): void {
+  _recentSignalPushes.clear();
+}
 
 // ── Live multi-TF scan results (in-memory) ────────────────────────────────
 
@@ -464,6 +492,21 @@ export async function runScalperScan(): Promise<void> {
     },
     "Scalper loop: signals found",
   );
+
+  // Push high-quality signals to opted-in mobile devices (dedup + throttle
+  // applied inside maybePushSignal). Fires regardless of whether the executor
+  // accepts the trade — the operator wants to see strong setups even when
+  // exposure caps prevent execution.
+  for (const sig of signals) {
+    if (sig.quality != null) {
+      maybePushSignal({
+        symbol: sig.symbol,
+        side: sig.side,
+        strategy: sig.strategy ?? strategy,
+        quality: sig.quality,
+      });
+    }
+  }
 
   for (const signal of signals) {
     await executeScalperSignal(signal).catch((err) => {
