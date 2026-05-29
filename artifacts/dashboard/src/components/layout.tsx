@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { Activity, LayoutDashboard, List, Bot, BarChart2, FlaskConical, Zap } from "lucide-react";
+import { Activity, LayoutDashboard, List, Bot, BarChart2, FlaskConical, Zap, Smartphone } from "lucide-react";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
@@ -11,6 +11,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     { href: "/scalper", icon: Zap, label: "Scalper", active: location === "/scalper" },
     { href: "/analytics", icon: BarChart2, label: "Analytics", active: location === "/analytics" },
     { href: "/backtest", icon: FlaskConical, label: "Backtest", active: location === "/backtest" },
+    { href: "/devices", icon: Smartphone, label: "Devices", active: location === "/devices" },
   ];
 
   return (
