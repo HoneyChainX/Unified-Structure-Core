@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, signalsTable } from "@workspace/db";
-import { eq, desc, count, avg, and, sql } from "drizzle-orm";
+import { eq, desc, count, avg, and, sql, gte, isNotNull } from "drizzle-orm";
 import {
   ReceiveWebhookBody,
   ListSignalsQueryParams,
@@ -227,6 +227,53 @@ router.delete("/:id", async (req, res): Promise<void> => {
     .where(eq(signalsTable.id, parsed.data.id));
 
   res.status(204).send();
+});
+
+// ── Quality observability (Phase 2) ───────────────────────────────────────
+// Histogram + summary stats over signals with a populated `quality` score.
+// Window defaults to 7 days; pass ?hours=N to override.
+router.get("/quality-stats", async (req, res): Promise<void> => {
+  const hours = Math.max(1, Math.min(720, parseInt(String(req.query.hours ?? "168"), 10) || 168));
+  const since = new Date(Date.now() - hours * 60 * 60_000);
+
+  const rows = await db
+    .select({ quality: signalsTable.quality, triggered: signalsTable.triggered, receivedAt: signalsTable.receivedAt })
+    .from(signalsTable)
+    .where(and(gte(signalsTable.receivedAt, since), isNotNull(signalsTable.quality)));
+
+  // 10 bins, [0,0.1), [0.1,0.2), … [0.9,1.0]
+  const bins = Array.from({ length: 10 }, () => ({ count: 0, triggered: 0 }));
+  let sum = 0;
+  let triggeredSum = 0;
+  let triggeredCount = 0;
+  for (const r of rows) {
+    const q = r.quality != null ? parseFloat(r.quality) : null;
+    if (q == null || !Number.isFinite(q)) continue;
+    const clamped = Math.max(0, Math.min(0.9999, q));
+    const idx = Math.floor(clamped * 10);
+    bins[idx].count++;
+    if (r.triggered) bins[idx].triggered++;
+    sum += q;
+    if (r.triggered) {
+      triggeredSum += q;
+      triggeredCount++;
+    }
+  }
+  const total = rows.length;
+  res.json({
+    windowHours: hours,
+    since: since.toISOString(),
+    total,
+    triggered: triggeredCount,
+    avgQuality:           total > 0 ? sum / total : null,
+    avgQualityTriggered:  triggeredCount > 0 ? triggeredSum / triggeredCount : null,
+    histogram: bins.map((b, i) => ({
+      bucket: i / 10,
+      bucketLabel: `${(i / 10).toFixed(1)}–${((i + 1) / 10).toFixed(1)}`,
+      count: b.count,
+      triggered: b.triggered,
+    })),
+  });
 });
 
 export default router;
