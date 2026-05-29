@@ -113,6 +113,16 @@ export const scalperConfigTable = pgTable("scalper_config", {
   mrxFundingFilterEnabled: boolean("mrx_funding_filter_enabled").notNull().default(false),
   mrxFundingThresholdPct:  real("mrx_funding_threshold_pct").notNull().default(0.05),
 
+  // Fractional-Kelly position sizing. Multiplies the base position size by
+  // a Kelly fraction derived from each symbol's closed-trade history.
+  // Composes with quality-aware sizing — each multiplier is independent.
+  kellySizingEnabled:   boolean("kelly_sizing_enabled").notNull().default(false),
+  kellyLookbackTrades:  integer("kelly_lookback_trades").notNull().default(30),
+  kellyMinTrades:       integer("kelly_min_trades").notNull().default(10),
+  kellySafetyFraction:  real("kelly_safety_fraction").notNull().default(0.5),
+  kellyFloorPct:        real("kelly_floor_pct").notNull().default(10),
+  kellyMaxPct:          real("kelly_max_pct").notNull().default(100),
+
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

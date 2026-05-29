@@ -27,6 +27,7 @@ import { logger } from "../lib/logger";
 import { notifyMobile } from "./notify-mobile";
 import { checkRiskGuard } from "./risk-guard";
 import { pnlFromFills } from "./fees";
+import { getKellyMultiplierForSymbol } from "./kelly-sizing";
 
 /**
  * Emergency-close a position that was opened but failed to receive its SL.
@@ -232,6 +233,45 @@ export async function executeScalperSignal(signal: ScalperSignal, opts: ExecuteO
       "Scalper: quality-aware sizing applied",
     );
     positionSize = scaledSize;
+  }
+
+  // ── Kelly-fraction sizing (Phase 2) ───────────────────────────────────────
+  // Composes with quality-aware sizing — both multipliers apply.
+  // Independent dimensions: quality reflects setup strength right now;
+  // Kelly reflects historical edge on this symbol.
+  const kellyCfg = config as {
+    kellySizingEnabled?: boolean;
+    kellyLookbackTrades?: number;
+    kellyMinTrades?: number;
+    kellySafetyFraction?: number;
+    kellyFloorPct?: number;
+    kellyMaxPct?: number;
+  };
+  const applyKellyScaling = kellyCfg.kellySizingEnabled === true && !isMicro;
+  if (applyKellyScaling) {
+    try {
+      const kelly = await getKellyMultiplierForSymbol(signal.gateSymbol, {
+        enabled: true,
+        lookbackTrades: kellyCfg.kellyLookbackTrades ?? 30,
+        minTrades: kellyCfg.kellyMinTrades ?? 10,
+        safetyFraction: kellyCfg.kellySafetyFraction ?? 0.5,
+        floorPct: kellyCfg.kellyFloorPct ?? 10,
+        maxPct: kellyCfg.kellyMaxPct ?? 100,
+      });
+      const beforeKelly = positionSize;
+      positionSize *= kelly.multiplier;
+      logger.info(
+        {
+          symbol: signal.gateSymbol, reason: kelly.reason, trades: kelly.trades,
+          winRate: kelly.winRate?.toFixed(3), avgWin: kelly.avgWin?.toFixed(3), avgLoss: kelly.avgLoss?.toFixed(3),
+          kellyFraction: kelly.kellyFraction?.toFixed(3), multiplier: kelly.multiplier.toFixed(3),
+          beforeKelly: beforeKelly.toFixed(4), afterKelly: positionSize.toFixed(4),
+        },
+        "Scalper: Kelly sizing applied",
+      );
+    } catch (err) {
+      logger.warn({ err, symbol: signal.gateSymbol }, "Scalper: Kelly sizing query failed — using unscaled size");
+    }
   }
 
   let quantity: number;
