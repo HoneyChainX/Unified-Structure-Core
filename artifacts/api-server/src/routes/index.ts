@@ -8,6 +8,7 @@ import devRouter from "./dev";
 import riskRouter from "./risk";
 import mobileRouter from "./mobile";
 import devicesRouter from "./devices";
+import backtestRouter from "./backtest";
 
 const router: IRouter = Router();
 
@@ -20,5 +21,6 @@ router.use("/dev", devRouter);
 router.use("/risk", riskRouter);
 router.use("/mobile", mobileRouter);
 router.use("/devices", devicesRouter);
+router.use("/backtest", backtestRouter);
 
 export default router;
