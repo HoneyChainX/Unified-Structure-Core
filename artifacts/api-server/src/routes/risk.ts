@@ -38,13 +38,21 @@ router.put("/", async (req, res): Promise<void> => {
   res.json(updated);
 });
 
-/** POST /api/risk/kill — engage the global kill switch. */
-router.post("/kill", async (req, res) => {
+/**
+ * POST /api/risk/kill — engage the global kill switch.
+ *
+ * Also reachable at POST /api/risk/halt — same handler. The mobile app's
+ * "HALT ALL TRADING" button calls /halt, and most external docs use /halt
+ * to match the user-facing label. /kill is the original name. Keep both.
+ */
+const killHandler = async (req: import("express").Request, res: import("express").Response): Promise<void> => {
   const reason = typeof req.body?.reason === "number" ? req.body.reason : 0;
   await setKillSwitch(true, reason);
   const config = await readConfig();
   res.json({ ok: true, config });
-});
+};
+router.post("/kill", killHandler);
+router.post("/halt", killHandler);
 
 /** POST /api/risk/resume — clear the kill switch. */
 router.post("/resume", async (_req, res) => {
