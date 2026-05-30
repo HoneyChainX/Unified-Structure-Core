@@ -47,3 +47,6 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Claude Code worktree metadata (created by Agent tool with isolation: "worktree")
+.claude/
